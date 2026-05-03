@@ -6,16 +6,19 @@ function App() {
   const wsRef = useRef<WebSocket | null>(null)
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8080/ws/chat')
+    const token = localStorage.getItem('token')
+    if (!token) {
+        console.warn('No token in localStorage — log in first')
+        return
+    }
+    const ws = new WebSocket(`ws://localhost:8080/ws/chat?token=${token}`)
+
     wsRef.current = ws
 
     ws.onopen    = () => console.log('connected')
     ws.onclose   = () => console.log('closed')
     ws.onerror   = (e) => console.error('error', e)
-    // TODO 1: when a message arrives, append it to `messages` state.
-    //         Hint: setMessages(prev => [...prev, e.data])  — why "prev =>"?
     ws.onmessage = (e) => {
-      // your code
       setMessages(prev => [...prev, e.data])
     }
 
@@ -23,9 +26,6 @@ function App() {
   }, [])
 
   function send() {
-    // TODO 2: only send if the WebSocket is open.
-    //         Open state: wsRef.current?.readyState === WebSocket.OPEN
-    //         Then: wsRef.current.send(input)  and clear the input.
     if(wsRef.current?.readyState === WebSocket.OPEN){
       wsRef.current.send(input);
       setInput("");
@@ -37,7 +37,6 @@ function App() {
       <h1>Iris</h1>
 
       <ul style={{ minHeight: 200, border: '1px solid #ccc', padding: '0.5rem', listStyle: 'none' }}>
-        {/* TODO 3: render every message in `messages` as a <li> */}
         {messages.map((message,i) => <li key={i}>{message}</li>)}
       </ul>
 

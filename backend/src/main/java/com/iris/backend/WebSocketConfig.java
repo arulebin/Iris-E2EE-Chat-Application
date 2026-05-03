@@ -10,15 +10,18 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 public class WebSocketConfig implements WebSocketConfigurer {
 
     private final ChatWebSocketHandler chatHandler;
+    private final JwtHandshakeInterceptor jwtInterceptor;        // ← new
 
-    // Spring auto-injects ChatWebSocketHandler here (constructor injection)
-    public WebSocketConfig(ChatWebSocketHandler chatHandler) {
+    public WebSocketConfig(ChatWebSocketHandler chatHandler,
+                           JwtHandshakeInterceptor jwtInterceptor) {  // ← new
         this.chatHandler = chatHandler;
+        this.jwtInterceptor = jwtInterceptor;
     }
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(chatHandler, "/ws/chat")
-                .setAllowedOrigins("*");   // dev-only — we'll lock this down later
+                .addInterceptors(jwtInterceptor)                  // ← new
+                .setAllowedOrigins("*");
     }
 }

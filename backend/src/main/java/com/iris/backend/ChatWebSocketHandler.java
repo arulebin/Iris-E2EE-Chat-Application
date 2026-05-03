@@ -17,28 +17,23 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
-        // TODO 1: a new client just connected — remember its session
         sessions.add(session);
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
-        // TODO 2: the client disconnected — forget its session
         sessions.remove(session);
     }
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        // TODO 3: a client sent a message. Broadcast it to every other open session.
-        //         (For now, the sender will also receive their own message back — fine for testing.)
-        sessions.forEach(s -> {
+        String username = (String) session.getAttributes().get("username");
+        String formatted = username + ": " + message.getPayload();
+
+        for (WebSocketSession s : sessions) {
             if (s.isOpen()) {
-                try {
-                    s.sendMessage(new TextMessage(message.getPayload()));
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
+                s.sendMessage(new TextMessage(formatted));
             }
-        });    
-    }
+        }  
+        }
 }
