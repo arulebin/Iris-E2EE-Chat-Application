@@ -13,7 +13,6 @@ import java.util.concurrent.CopyOnWriteArraySet;
 @Component
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
-    // a thread-safe set of all open client connections
     private final Set<WebSocketSession> sessions = new CopyOnWriteArraySet<>();
 
     @Override
