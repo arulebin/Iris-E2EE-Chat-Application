@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 
+type ChatMessage = { from: string; to: string; content: string; sentAt: string }
+
+function getUsername(token: string | null): string | null {
+  if (!token) return null
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return payload.sub as string
+  } catch { return null }
+}
+
 function App() {
   const [token, setToken]       = useState<string | null>(() => localStorage.getItem('token'))
   const [mode, setMode]         = useState<'login' | 'signup'>('login')
@@ -7,10 +17,15 @@ function App() {
   const [password, setPassword] = useState('')
   const [error, setError]       = useState<string | null>(null)
 
-  const [messages, setMessages] = useState<string[]>([])
-  const [input, setInput]       = useState('')
-  const wsRef                   = useRef<WebSocket | null>(null)
+  const [users, setUsers]         = useState<string[]>([])
+  const [messages, setMessages]   = useState<ChatMessage[]>([])
+  const [recipient, setRecipient] = useState('')
+  const [input, setInput]         = useState('')
+  const wsRef                     = useRef<WebSocket | null>(null)
 
+  const me = getUsername(token)
+
+  // ── auth handlers ────────────────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
@@ -45,9 +60,35 @@ function App() {
     localStorage.removeItem('token')
     setToken(null)
     setMessages([])
+    setUsers([])
+    setRecipient('')
     wsRef.current?.close()
   }
 
+  // ── fetch user list on login ─────────────────────────────────────
+  useEffect(() => {
+    if (!token) return
+    fetch('http://localhost:8080/api/users', {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(res => res.ok ? res.json() : [])
+      .then((list: string[]) => setUsers(list))
+      .catch(() => setUsers([]))
+  }, [token])
+
+  // ── fetch conversation history on recipient change ───────────────
+  useEffect(() => {
+    if (!token || !recipient.trim()) return
+    fetch(`http://localhost:8080/api/messages?with=${encodeURIComponent(recipient)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
+      .then(res => res.ok ? res.json() : [])
+      .then((history: ChatMessage[]) => setMessages(history))
+      .catch(() => setMessages([]))
+  }, [token, recipient])
+
+  // ── WebSocket: re-create when token, recipient, or me changes ────
+  // (the deps include recipient/me so the onmessage closure has fresh values)
   useEffect(() => {
     if (!token) return
     const ws = new WebSocket(`ws://localhost:8080/ws/chat?token=${token}`)
@@ -55,19 +96,31 @@ function App() {
     ws.onopen    = () => console.log('connected')
     ws.onclose   = () => console.log('closed')
     ws.onerror   = (e) => console.error('error', e)
-    ws.onmessage = (e) => setMessages(prev => [...prev, e.data])
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data) as ChatMessage
+        const isCurrentChat =
+          (msg.from === me && msg.to === recipient) ||
+          (msg.from === recipient && msg.to === me)
+        if (isCurrentChat) {
+          setMessages(prev => [...prev, msg])
+        }
+      } catch {
+        // ignore non-JSON
+      }
+    }
     return () => ws.close()
-  }, [token])
+  }, [token, recipient, me])
 
   function send() {
-    if (input.trim() === '') return
+    if (input.trim() === '' || recipient.trim() === '') return
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(input)
+      wsRef.current.send(JSON.stringify({ to: recipient, content: input }))
       setInput('')
     }
   }
 
-  // ── LOGIN / SIGNUP ──────────────────────────────────────────────
+  // ── LOGIN / SIGNUP VIEW ──────────────────────────────────────────
   if (!token) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
@@ -121,49 +174,92 @@ function App() {
     )
   }
 
-  // ── CHAT ────────────────────────────────────────────────────────
+  // ── CHAT VIEW (sidebar + main panel) ─────────────────────────────
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
-        <h1 className="text-xl font-bold text-slate-900">Iris</h1>
-        <button
-          onClick={handleLogout}
-          className="text-sm text-slate-500 hover:text-slate-900"
-        >
-          Log out
-        </button>
-      </header>
+    <div className="min-h-screen flex bg-slate-50">
 
-      <main className="flex-1 overflow-y-auto px-6 py-4">
-        <ul className="max-w-2xl mx-auto flex flex-col gap-2">
-          {messages.map((m, i) => (
-            <li
-              key={i}
-              className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-800 shadow-sm"
-            >
-              {m}
-            </li>
-          ))}
-        </ul>
-      </main>
+      {/* SIDEBAR */}
+      <aside className="w-64 border-r border-slate-200 bg-white flex flex-col">
+        <div className="p-4 border-b border-slate-200">
+          <h1 className="text-xl font-bold text-slate-900">Iris</h1>
+          <p className="text-xs text-slate-500">Signed in as <span className="font-medium">{me}</span></p>
+        </div>
 
-      <footer className="border-t border-slate-200 bg-white px-6 py-3">
-        <div className="max-w-2xl mx-auto flex gap-2">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder="Type and press Enter"
-            className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
+        <nav className="flex-1 overflow-y-auto p-2">
+          {users.length === 0 ? (
+            <p className="text-sm text-slate-400 px-3 py-2">No other users yet</p>
+          ) : (
+            users.map(u => (
+              <button
+                key={u}
+                onClick={() => setRecipient(u)}
+                className={`w-full text-left px-3 py-2 rounded-lg transition ${
+                  recipient === u
+                    ? 'bg-indigo-100 text-indigo-700 font-medium'
+                    : 'hover:bg-slate-100 text-slate-700'
+                }`}
+              >
+                {u}
+              </button>
+            ))
+          )}
+        </nav>
+
+        <div className="p-4 border-t border-slate-200">
           <button
-            onClick={send}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg transition"
+            onClick={handleLogout}
+            className="text-sm text-slate-500 hover:text-slate-900"
           >
-            Send
+            Log out
           </button>
         </div>
-      </footer>
+      </aside>
+
+      {/* MAIN */}
+      <div className="flex-1 flex flex-col">
+        <header className="border-b border-slate-200 bg-white px-6 py-3">
+          <h2 className="text-lg font-semibold text-slate-900">
+            {recipient ? `Chat with ${recipient}` : 'Select someone to chat with'}
+          </h2>
+        </header>
+
+        <main className="flex-1 overflow-y-auto px-6 py-4">
+          <ul className="flex flex-col gap-2 max-w-2xl mx-auto">
+            {messages.map((m, i) => (
+              <li
+                key={i}
+                className={`max-w-md px-3 py-2 rounded-2xl shadow-sm ${
+                  m.from === me
+                    ? 'self-end bg-indigo-600 text-white rounded-br-sm'
+                    : 'self-start bg-white border border-slate-200 text-slate-800 rounded-bl-sm'
+                }`}
+              >
+                {m.content}
+              </li>
+            ))}
+          </ul>
+        </main>
+
+        {recipient && (
+          <footer className="border-t border-slate-200 bg-white px-6 py-3">
+            <div className="max-w-2xl mx-auto flex gap-2">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && send()}
+                placeholder={`Message ${recipient}`}
+                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button
+                onClick={send}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg transition"
+              >
+                Send
+              </button>
+            </div>
+          </footer>
+        )}
+      </div>
     </div>
   )
 }
