@@ -1,6 +1,8 @@
 package com.iris.backend;
 
 import jakarta.persistence.*;
+import jakarta.websocket.Decoder.Text;
+
 import java.time.Instant;
 
 @Entity
@@ -20,6 +22,9 @@ public class User {
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
+    @Column(columnDefinition = "TEXT")
+    private String publicKey;
+
     // JPA requires a no-arg constructor (reflection)
     protected User() { }
 
@@ -33,4 +38,6 @@ public class User {
     public String getUsername() { return username; }
     public String getPasswordHash() { return passwordHash; }
     public Instant getCreatedAt() { return createdAt; }
+    public String getPublicKey() { return publicKey; }
+    public void setPublicKey(String publicKey) { this.publicKey = publicKey; }
 }
