@@ -66,13 +66,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
 
         // persist
-        Message saved = messageRepository.save(new Message(sender, incoming.to(), incoming.content()));
+        Message saved = messageRepository.save(new Message(sender, incoming.to(), incoming.content(), incoming.encryptedKeyForSender(), incoming.encryptedKeyForRecipient()));
 
         // build outgoing payload
         OutgoingMessage out = new OutgoingMessage(
             saved.getSender(),
             saved.getRecipient(),
             saved.getContent(),
+            saved.getEncryptedKeyForSender(),
+            saved.getEncryptedKeyForRecipient(),
             saved.getSentAt()
         );
         String payload = objectMapper.writeValueAsString(out);

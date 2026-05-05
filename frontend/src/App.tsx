@@ -1,6 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { ensureKeyPair, fetchPublicKey, encryptMessage, decryptMessage } from './crypto'
 
-type ChatMessage = { from: string; to: string; content: string; sentAt: string }
+type ChatMessage = {
+  from: string
+  to: string
+  content: string
+  encryptedKeyForSender?: string | null
+  encryptedKeyForRecipient?: string | null
+  sentAt: string
+}
 
 function getUsername(token: string | null): string | null {
   if (!token) return null
@@ -22,6 +30,10 @@ function App() {
   const [recipient, setRecipient] = useState('')
   const [input, setInput]         = useState('')
   const wsRef                     = useRef<WebSocket | null>(null)
+
+  const [privateKey, setPrivateKey]                 = useState<CryptoKey | null>(null)
+  const [myPublicKey, setMyPublicKey]               = useState<CryptoKey | null>(null)
+  const [recipientPublicKey, setRecipientPublicKey] = useState<CryptoKey | null>(null)
 
   const me = getUsername(token)
 
@@ -62,8 +74,49 @@ function App() {
     setMessages([])
     setUsers([])
     setRecipient('')
+    setPrivateKey(null)
+    setMyPublicKey(null)
+    setRecipientPublicKey(null)
     wsRef.current?.close()
   }
+
+  // ── ensure keypair after login ───────────────────────────────────
+  useEffect(() => {
+    if (!token || !me) return
+    ensureKeyPair(me, token)
+      .then(({ privateKey, publicKey }) => {
+        setPrivateKey(privateKey)
+        setMyPublicKey(publicKey)
+      })
+      .catch(err => console.error('Key setup failed:', err))
+  }, [token, me])
+
+  // ── handler: pick a recipient (clears stale key + fetches the new one) ──
+  async function selectRecipient(user: string) {
+    setRecipient(user)
+    setRecipientPublicKey(null)         // clear synchronously so a fast send can't use stale key
+    if (!token) return
+    try {
+      const key = await fetchPublicKey(user, token)
+      setRecipientPublicKey(key)
+    } catch (err) {
+      console.error(`No key for ${user}:`, err)
+    }
+  }
+
+  // ── decrypt one incoming/historical message ──────────────────────
+  const decryptIncoming = useCallback(async (msg: ChatMessage): Promise<ChatMessage> => {
+    if (!privateKey) return msg
+    const encryptedKey = msg.from === me ? msg.encryptedKeyForSender : msg.encryptedKeyForRecipient
+    if (!encryptedKey) return msg   // legacy / unencrypted
+    try {
+      const plaintext = await decryptMessage(msg.content, encryptedKey, privateKey)
+      return { ...msg, content: plaintext }
+    } catch (err) {
+      console.error('Decryption failed', err)
+      return { ...msg, content: '🔒 [unable to decrypt]' }
+    }
+  }, [privateKey, me])
 
   // ── fetch user list on login ─────────────────────────────────────
   useEffect(() => {
@@ -76,19 +129,21 @@ function App() {
       .catch(() => setUsers([]))
   }, [token])
 
-  // ── fetch conversation history on recipient change ───────────────
+  // ── fetch + decrypt conversation history when recipient changes ─
   useEffect(() => {
-    if (!token || !recipient.trim()) return
+    if (!token || !recipient.trim() || !privateKey) return
     fetch(`http://localhost:8080/api/messages?with=${encodeURIComponent(recipient)}`, {
       headers: { Authorization: `Bearer ${token}` }
     })
       .then(res => res.ok ? res.json() : [])
-      .then((history: ChatMessage[]) => setMessages(history))
+      .then(async (history: ChatMessage[]) => {
+        const decrypted = await Promise.all(history.map(decryptIncoming))
+        setMessages(decrypted)
+      })
       .catch(() => setMessages([]))
-  }, [token, recipient])
+  }, [token, recipient, privateKey, decryptIncoming])
 
-  // ── WebSocket: re-create when token, recipient, or me changes ────
-  // (the deps include recipient/me so the onmessage closure has fresh values)
+  // ── WebSocket: re-create when token, recipient, me, or privateKey changes ─
   useEffect(() => {
     if (!token) return
     const ws = new WebSocket(`ws://localhost:8080/ws/chat?token=${token}`)
@@ -96,27 +151,42 @@ function App() {
     ws.onopen    = () => console.log('connected')
     ws.onclose   = () => console.log('closed')
     ws.onerror   = (e) => console.error('error', e)
-    ws.onmessage = (e) => {
+    ws.onmessage = async (e) => {
       try {
         const msg = JSON.parse(e.data) as ChatMessage
         const isCurrentChat =
           (msg.from === me && msg.to === recipient) ||
           (msg.from === recipient && msg.to === me)
         if (isCurrentChat) {
-          setMessages(prev => [...prev, msg])
+          const decrypted = await decryptIncoming(msg)
+          setMessages(prev => [...prev, decrypted])
         }
       } catch {
         // ignore non-JSON
       }
     }
     return () => ws.close()
-  }, [token, recipient, me])
+  }, [token, recipient, me, decryptIncoming])
 
-  function send() {
+  async function send() {
     if (input.trim() === '' || recipient.trim() === '') return
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ to: recipient, content: input }))
+    if (!myPublicKey || !recipientPublicKey) {
+      console.warn('keys not ready yet')
+      return
+    }
+    if (wsRef.current?.readyState !== WebSocket.OPEN) return
+
+    try {
+      const enc = await encryptMessage(input, myPublicKey, recipientPublicKey)
+      wsRef.current.send(JSON.stringify({
+        to: recipient,
+        content: enc.ciphertext,
+        encryptedKeyForSender:    enc.encryptedKeyForSender,
+        encryptedKeyForRecipient: enc.encryptedKeyForRecipient,
+      }))
       setInput('')
+    } catch (err) {
+      console.error('Encryption failed', err)
     }
   }
 
@@ -192,7 +262,7 @@ function App() {
             users.map(u => (
               <button
                 key={u}
-                onClick={() => setRecipient(u)}
+                onClick={() => selectRecipient(u)}
                 className={`w-full text-left px-3 py-2 rounded-lg transition ${
                   recipient === u
                     ? 'bg-indigo-100 text-indigo-700 font-medium'
@@ -248,15 +318,22 @@ function App() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && send()}
                 placeholder={`Message ${recipient}`}
-                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                disabled={!recipientPublicKey}
+                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100"
               />
               <button
                 onClick={send}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg transition"
+                disabled={!recipientPublicKey || !myPublicKey}
+                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-medium px-4 py-2 rounded-lg transition"
               >
                 Send
               </button>
             </div>
+            {!recipientPublicKey && (
+              <p className="text-xs text-slate-400 max-w-2xl mx-auto mt-1">
+                {recipient} hasn't uploaded a public key yet — ask them to log in.
+              </p>
+            )}
           </footer>
         )}
       </div>

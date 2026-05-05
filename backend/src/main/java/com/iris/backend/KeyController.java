@@ -29,7 +29,7 @@ public class KeyController {
 
     public static record PublicKeyRequest(String publicKey) { }
 
-    @GetMapping("/keys/{username}")
+    @GetMapping("/{username}")
     public ResponseEntity<String> getKey(@PathVariable String username) {
         return userRepository.findByUsername(username)
                 .map(User::getPublicKey)
