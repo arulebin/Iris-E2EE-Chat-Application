@@ -24,9 +24,16 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     // username → that user's open sessions (could be multiple tabs)
     private final Map<String, Set<WebSocketSession>> sessionsByUser = new ConcurrentHashMap<>();
 
-    public ChatWebSocketHandler(MessageRepository messageRepository, ObjectMapper objectMapper) {
+    private final PushNotificationService pushNotificationService;
+
+    public ChatWebSocketHandler(
+            MessageRepository messageRepository,
+            ObjectMapper objectMapper,
+            PushNotificationService pushNotificationService
+    ) {
         this.messageRepository = messageRepository;
         this.objectMapper = objectMapper;
+        this.pushNotificationService = pushNotificationService;
     }
 
     @Override
@@ -86,6 +93,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         for (String username : targets) {
             sendToUser(username, payload);
+        }
+        boolean recipientOnline = sessionsByUser.containsKey(incoming.to())
+        && !sessionsByUser.get(incoming.to()).isEmpty();
+        if (!recipientOnline) {
+            pushNotificationService.sendToUser(
+                    incoming.to(),
+                    "Iris",
+                    "New message from " + sender
+            );
         }
     }
 
