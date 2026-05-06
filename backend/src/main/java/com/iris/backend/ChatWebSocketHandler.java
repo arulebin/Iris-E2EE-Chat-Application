@@ -41,6 +41,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         String username = (String) session.getAttributes().get("username");
+        session.getAttributes().put("visible", Boolean.TRUE);  // assume visible until told otherwise
         sessionsByUser
             .computeIfAbsent(username, k -> new CopyOnWriteArraySet<>())
             .add(session);
@@ -66,13 +67,28 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         JsonNode root = objectMapper.readTree(textMessage.getPayload());
         String type = root.has("type") ? root.get("type").asText() : "chat";
 
+        if ("visibility".equals(type)) {
+            // Tab signaled foreground/background — used to decide whether to push
+            boolean visible = root.has("state") && "visible".equals(root.get("state").asText());
+            session.getAttributes().put("visible", visible);
+            return;
+        }
+
         if (type.startsWith("call-")) {
             // Signaling — forward as-is to recipient with `from` added
             if (!root.has("to")) return;
             String to = root.get("to").asText();
             ObjectNode forwarded =
                     ((ObjectNode) root).put("from", sender);
-            sendToUser(to, forwarded.toString());
+            // call-offer rings only ONE session (the most recently connected),
+            // so a user with several open tabs doesn't get every tab ringing —
+            // and a stale tab can't race-answer a fresh tab. All other call-*
+            // messages broadcast normally; the receiving sessions decide what to do.
+            if ("call-offer".equals(type)) {
+                sendToOneSession(to, forwarded.toString());
+            } else {
+                sendToUser(to, forwarded.toString());
+            }
             return;
         }
 
@@ -101,9 +117,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         targets.add(sender);
         for (String username : targets) sendToUser(username, payload);
 
-        boolean recipientOnline = sessionsByUser.containsKey(incoming.to())
-                && !sessionsByUser.get(incoming.to()).isEmpty();
-        if (!recipientOnline) {
+        // "Active" = at least one session is open AND its tab is visible.
+        // Backgrounded tabs no longer count as online — push fires for them so the user actually sees the notification.
+        Set<WebSocketSession> recipientSessions = sessionsByUser.getOrDefault(incoming.to(), Set.of());
+        boolean recipientActive = recipientSessions.stream()
+            .anyMatch(s -> s.isOpen()
+                && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE)));
+        if (!recipientActive) {
             pushNotificationService.sendToUser(incoming.to(), "Iris", "New message from " + sender);
         }
     }
@@ -116,6 +136,23 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             if (s.isOpen()) {
                 s.sendMessage(new TextMessage(payload));
             }
+        }
+    }
+
+    /**
+     * Send to exactly one session — the most recently added open session for the user.
+     * CopyOnWriteArraySet iterates in insertion order, so the last open session in
+     * iteration is the one most recently connected.
+     */
+    private void sendToOneSession(String username, String payload) throws IOException {
+        Set<WebSocketSession> userSessions = sessionsByUser.get(username);
+        if (userSessions == null) return;
+        WebSocketSession latest = null;
+        for (WebSocketSession s : userSessions) {
+            if (s.isOpen()) latest = s;
+        }
+        if (latest != null) {
+            latest.sendMessage(new TextMessage(payload));
         }
     }
 }

@@ -17,6 +17,12 @@ type ChatMessage = {
   sentAt: string;
 };
 
+type CallState =
+  | { kind: 'idle' }
+  | { kind: 'outgoing'; to: string }                              
+  | { kind: 'incoming'; from: string; offer: RTCSessionDescriptionInit }  
+  | { kind: 'active'; peer: string }    
+
 function getUsername(token: string | null): string | null {
   if (!token) return null;
   try {
@@ -27,10 +33,30 @@ function getUsername(token: string | null): string | null {
   }
 }
 
+function getTokenExpiryMs(token: string | null): number | null {
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+function isTokenExpired(token: string | null): boolean {
+  const expiryMs = getTokenExpiryMs(token);
+  return expiryMs === null || expiryMs <= Date.now();
+}
+
 function App() {
-  const [token, setToken] = useState<string | null>(() =>
-    localStorage.getItem("token"),
-  );
+  const [token, setToken] = useState<string | null>(() => {
+    const stored = localStorage.getItem("token");
+    if (isTokenExpired(stored)) {
+      localStorage.removeItem("token");
+      return null;
+    }
+    return stored;
+  });
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -48,17 +74,22 @@ function App() {
     useState<CryptoKey | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
+  const [isBrave, setIsBrave] = useState(false);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const localVideoRef = useRef<HTMLVideoElement | null>(null)
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null)
   const pcRef = useRef<RTCPeerConnection | null>(null)
-  const pendingIceRef = useRef<RTCIceCandidateInit[]>([])
-  // Holds the latest closure of handleSignal so ws.onmessage can call it
-  // without forward-reference or stale-closure problems.
+  const pendingIceRef = useRef<RTCIceCandidateInit[]>([])                          
   const handleSignalRef = useRef<((s: CallSignal) => Promise<void>) | null>(null)
-
-
+  const [callState, setCallState] = useState<CallState>({ kind: 'idle' })
+  const [callNotice, setCallNotice] = useState<string | null>(null)
+  // Refs that mirror state used inside ws.onmessage — kept in sync via a deps-less
+  // useEffect below. Using refs lets the WS effect's deps stay [token] so the
+  // socket only reconnects on login/logout, not on every sidebar click.
+  const recipientRef = useRef<string>("")
+  const decryptIncomingRef = useRef<((m: ChatMessage) => Promise<ChatMessage>) | null>(null)
+  const meRef = useRef<string | null>(null)
   const me = getUsername(token);
 
   // ── auth handlers ────────────────────────────────────────────────
@@ -93,6 +124,24 @@ function App() {
   }
   useEffect(() => {
     hasExistingSubscription().then(setPushEnabled);
+  }, [token]);
+
+  // ── Brave detection: their default settings block FCM push ─────────
+  useEffect(() => {
+    const nav = navigator as Navigator & { brave?: { isBrave?: () => Promise<boolean> } };
+    nav.brave?.isBrave?.().then(setIsBrave).catch(() => {});
+  }, []);
+
+  // ── auto-logout when the JWT hits its exp timestamp ───────────────
+  useEffect(() => {
+    if (!token) return;
+    const expiryMs = getTokenExpiryMs(token);
+    if (expiryMs === null) return;
+    const id = setTimeout(() => {
+      localStorage.removeItem("token");
+      setToken(null);
+    }, Math.max(0, expiryMs - Date.now()));
+    return () => clearTimeout(id);
   }, [token]);
 
   function handleLogout() {
@@ -197,12 +246,28 @@ function App() {
       .catch(() => setMessages([]));
   }, [token, recipient, privateKey, decryptIncoming]);
 
-  // ── WebSocket: re-create when token, recipient, me, or privateKey changes ─
+  // Sync the refs the WebSocket handler reads from. Deps-less so it runs every
+  // render — same pattern as handleSignalRef. Keeps the WS effect from needing
+  // recipient / decryptIncoming / me in its deps.
+  useEffect(() => {
+    recipientRef.current = recipient;
+    decryptIncomingRef.current = decryptIncoming;
+    meRef.current = me;
+  });
+
+  // ── WebSocket: connects once on login, stays up until logout ────
   useEffect(() => {
     if (!token) return;
     const ws = new WebSocket(`ws://localhost:8080/ws/chat?token=${token}`);
     wsRef.current = ws;
-    ws.onopen = () => console.log("connected");
+    ws.onopen = () => {
+      console.log("connected");
+      // Tell the server our initial visibility so push fires correctly for backgrounded tabs
+      ws.send(JSON.stringify({
+        type: 'visibility',
+        state: document.hidden ? 'hidden' : 'visible',
+      }));
+    };
     ws.onclose = () => console.log("closed");
     ws.onerror = (e) => console.error("error", e);
     ws.onmessage = async (e) => {
@@ -217,11 +282,13 @@ function App() {
 
         // ── chat ──
         const msg = data as ChatMessage;
+        const currentMe = meRef.current;
+        const currentRecipient = recipientRef.current;
         const isCurrentChat =
-          (msg.from === me && msg.to === recipient) ||
-          (msg.from === recipient && msg.to === me);
-        if (isCurrentChat) {
-          const decrypted = await decryptIncoming(msg);
+          (msg.from === currentMe && msg.to === currentRecipient) ||
+          (msg.from === currentRecipient && msg.to === currentMe);
+        if (isCurrentChat && decryptIncomingRef.current) {
+          const decrypted = await decryptIncomingRef.current(msg);
           setMessages((prev) => [...prev, decrypted]);
         }
       } catch {
@@ -229,7 +296,7 @@ function App() {
       }
     };
     return () => ws.close();
-  }, [token, recipient, me, decryptIncoming]);
+  }, [token]);
 
   async function send() {
     if (input.trim() === "" || recipient.trim() === "") return;
@@ -288,13 +355,30 @@ function App() {
 
   // ── WebRTC call lifecycle ───────────────────────────────────────
 
-  /** alice initiates a call to the current recipient */
+  /** Local cleanup. Caller is responsible for notifying the other side via call-end. */
+  function teardownCall() {
+    pcRef.current?.close()
+    pcRef.current = null
+    pendingIceRef.current = []
+    setRemoteStream(null)
+    stopCamera()
+    setCallState({ kind: 'idle' })
+  }
+
+  /** Outgoing: alice clicks 📞 Call. */
   async function startCall() {
     if (!recipient || !wsRef.current) return
+    if (callState.kind !== 'idle') return
+
+    setCallState({ kind: 'outgoing', to: recipient })
+
     let stream = localStream
     if (!stream) {
       stream = await startCamera()
-      if (!stream) return
+      if (!stream) {
+        setCallState({ kind: 'idle' })
+        return
+      }
     }
 
     const pc = createPeerConnection(wsRef.current, recipient, setRemoteStream)
@@ -305,70 +389,131 @@ function App() {
     await pc.setLocalDescription(offer)
 
     wsRef.current.send(
-      JSON.stringify({ type: "call-offer", to: recipient, payload: offer })
+      JSON.stringify({ type: 'call-offer', to: recipient, payload: offer })
     )
   }
 
-  /** bob's side: handle an incoming offer/answer/ice/end */
-  async function handleSignal(signal: CallSignal) {
+  /** Incoming-accept: bob clicks Accept on the modal. */
+  async function acceptCall() {
+    if (callState.kind !== 'incoming') return
     if (!wsRef.current) return
+    const { from, offer } = callState
 
-    if (signal.type === "call-offer") {
-      // Make sure we have a camera stream before answering
-      let stream = localStream
+    let stream = localStream
+    if (!stream) {
+      stream = await startCamera()
       if (!stream) {
-        stream = await startCamera()
-        if (!stream) return
+        wsRef.current.send(JSON.stringify({ type: 'call-end', to: from }))
+        setCallState({ kind: 'idle' })
+        return
       }
+    }
 
-      const pc = createPeerConnection(wsRef.current, signal.from!, setRemoteStream)
-      pcRef.current = pc
-      stream.getTracks().forEach((t) => pc.addTrack(t, stream!))
+    const pc = createPeerConnection(wsRef.current, from, setRemoteStream)
+    pcRef.current = pc
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream!))
 
+    await pc.setRemoteDescription(offer)
+
+    for (const c of pendingIceRef.current) {
+      try { await pc.addIceCandidate(c) } catch (e) { console.error('addIceCandidate', e) }
+    }
+    pendingIceRef.current = []
+
+    const answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    wsRef.current.send(JSON.stringify({ type: 'call-answer', to: from, payload: answer }))
+    setCallState({ kind: 'active', peer: from })
+  }
+
+  /** Incoming-reject: bob declines without ever setting up a peer connection. */
+  function rejectCall() {
+    if (callState.kind !== 'incoming') return
+    wsRef.current?.send(JSON.stringify({ type: 'call-end', to: callState.from }))
+    setCallState({ kind: 'idle' })
+  }
+
+  /** Cancel an outgoing attempt OR hang up an active call. */
+  function hangUp() {
+    if (callState.kind === 'outgoing' || callState.kind === 'active') {
+      const peer = callState.kind === 'outgoing' ? callState.to : callState.peer
+      wsRef.current?.send(JSON.stringify({ type: 'call-end', to: peer }))
+    }
+    teardownCall()
+  }
+
+  async function handleSignal(signal: CallSignal) {
+    if (signal.type === 'call-offer') {
+      // Busy: politely decline if a call is already in progress
+      if (callState.kind !== 'idle') {
+        wsRef.current?.send(JSON.stringify({ type: 'call-end', to: signal.from }))
+        return
+      }
+      setCallState({ kind: 'incoming', from: signal.from!, offer: signal.payload })
+      return
+    }
+
+    if (signal.type === 'call-answer') {
+      const pc = pcRef.current
+      if (!pc) return
       await pc.setRemoteDescription(signal.payload)
-
-      // Drain any ICE candidates that arrived before the remote description
       for (const c of pendingIceRef.current) {
-        try { await pc.addIceCandidate(c) } catch (e) { console.error("addIceCandidate", e) }
+        try { await pc.addIceCandidate(c) } catch (e) { console.error('addIceCandidate', e) }
       }
       pendingIceRef.current = []
-
-      const answer = await pc.createAnswer()
-      await pc.setLocalDescription(answer)
-
-      wsRef.current.send(
-        JSON.stringify({ type: "call-answer", to: signal.from, payload: answer })
-      )
-    } else if (signal.type === "call-answer") {
-      await pcRef.current?.setRemoteDescription(signal.payload)
-      for (const c of pendingIceRef.current) {
-        try { await pcRef.current?.addIceCandidate(c) } catch (e) { console.error("addIceCandidate", e) }
+      if (callState.kind === 'outgoing') {
+        setCallState({ kind: 'active', peer: callState.to })
       }
-      pendingIceRef.current = []
-    } else if (signal.type === "call-ice") {
+      return
+    }
+
+    if (signal.type === 'call-ice') {
       const pc = pcRef.current
       if (pc && pc.remoteDescription) {
-        try { await pc.addIceCandidate(signal.payload) } catch (e) { console.error("addIceCandidate", e) }
+        try { await pc.addIceCandidate(signal.payload) } catch (e) { console.error('addIceCandidate', e) }
       } else {
-        // queue until remote description is set
         pendingIceRef.current.push(signal.payload)
       }
-    } else if (signal.type === "call-end") {
-      hangUp(false)
+      return
+    }
+
+    if (signal.type === 'call-end') {
+      // Surface a reason for the caller / receiver so the UI doesn't just go silent
+      if (callState.kind === 'outgoing') {
+        setCallNotice(`${callState.to} is busy or declined the call`)
+      } else if (callState.kind === 'incoming') {
+        setCallNotice(`${callState.from} canceled the call`)
+      } else if (callState.kind === 'active') {
+        setCallNotice(`${callState.peer} ended the call`)
+      }
+      teardownCall()
+      return
     }
   }
 
-  /** Tear down the call locally; optionally tell the other side. */
-  function hangUp(notifyRemote: boolean) {
-    if (notifyRemote && recipient && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "call-end", to: recipient }))
+  // ── auto-dismiss the call notice after 4 seconds ─────────────────
+  useEffect(() => {
+    if (!callNotice) return
+    const id = setTimeout(() => setCallNotice(null), 4000)
+    return () => clearTimeout(id)
+  }, [callNotice])
+
+  // ── Page Visibility: tell the server when this tab is backgrounded ─
+  useEffect(() => {
+    if (!token) return
+    const onVisibility = () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'visibility',
+          state: document.hidden ? 'hidden' : 'visible',
+        }))
+      }
     }
-    pcRef.current?.close()
-    pcRef.current = null
-    pendingIceRef.current = []
-    setRemoteStream(null)
-    stopCamera()
-  }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [token])
+
 
   // Keep the ref updated with the latest closure so ws.onmessage uses fresh state.
   useEffect(() => {
@@ -480,6 +625,12 @@ function App() {
             <p className="text-xs text-slate-400">🔔 Notifications on</p>
           )}
           {pushError && <p className="text-xs text-red-500">{pushError}</p>}
+          {isBrave && !pushEnabled && (
+            <p className="text-xs text-slate-500 leading-snug">
+              Brave: enable Google services for push at{" "}
+              <span className="font-mono">brave://settings/privacy</span>
+            </p>
+          )}
           <button
             onClick={handleLogout}
             className="text-sm text-slate-500 hover:text-slate-900 text-left"
@@ -489,6 +640,41 @@ function App() {
         </div>
       </aside>
 
+      {/* TRANSIENT CALL NOTICE (busy / declined / hung up) */}
+      {callNotice && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-4 py-2 rounded-lg shadow-lg z-40 text-sm">
+          {callNotice}
+        </div>
+      )}
+
+      {/* INCOMING CALL MODAL */}
+      {callState.kind === 'incoming' && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl p-6 shadow-xl max-w-sm w-full mx-4">
+            <h2 className="text-lg font-semibold text-slate-900">
+              📞 Incoming call from {callState.from}
+            </h2>
+            <p className="text-sm text-slate-500 mt-1">
+              Camera and microphone will turn on if you accept.
+            </p>
+            <div className="flex gap-2 mt-4 justify-end">
+              <button
+                onClick={rejectCall}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-1.5 rounded-lg text-sm font-medium"
+              >
+                Reject
+              </button>
+              <button
+                onClick={acceptCall}
+                className="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium"
+              >
+                Accept
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MAIN */}
       <div className="flex-1 flex flex-col">
         <header className="border-b border-slate-200 bg-white px-6 py-3 flex items-center justify-between">
@@ -497,35 +683,42 @@ function App() {
               ? `Chat with ${recipient}`
               : "Select someone to chat with"}
           </h2>
-          {recipient && (
-            <div className="flex gap-2">
-              {pcRef.current || remoteStream ? (
+          <div className="flex gap-2">
+            {callState.kind === 'idle' && recipient && (
+              <>
                 <button
-                  onClick={() => hangUp(true)}
-                  className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-lg text-sm"
+                  onClick={startCall}
+                  className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-lg text-sm"
                 >
-                  Hang up
+                  📞 Call {recipient}
                 </button>
-              ) : (
-                <>
+                {localStream && (
                   <button
-                    onClick={startCall}
-                    className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-lg text-sm"
+                    onClick={stopCamera}
+                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1 rounded-lg text-sm"
                   >
-                    📞 Call {recipient}
+                    Camera off
                   </button>
-                  {localStream && (
-                    <button
-                      onClick={stopCamera}
-                      className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1 rounded-lg text-sm"
-                    >
-                      Camera off
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          )}
+                )}
+              </>
+            )}
+            {callState.kind === 'outgoing' && (
+              <button
+                onClick={hangUp}
+                className="bg-slate-500 hover:bg-slate-600 text-white px-3 py-1 rounded-lg text-sm"
+              >
+                Cancel call to {callState.to}…
+              </button>
+            )}
+            {callState.kind === 'active' && (
+              <button
+                onClick={hangUp}
+                className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-lg text-sm"
+              >
+                Hang up
+              </button>
+            )}
+          </div>
         </header>
 
         <main className="flex-1 overflow-y-auto px-6 py-4">
