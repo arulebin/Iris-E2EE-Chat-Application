@@ -6,7 +6,9 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.util.HashSet;
@@ -60,50 +62,52 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     protected void handleTextMessage(WebSocketSession session, TextMessage textMessage) throws Exception {
         String sender = (String) session.getAttributes().get("username");
 
-        IncomingMessage incoming;
-        try {
-            incoming = objectMapper.readValue(textMessage.getPayload(), IncomingMessage.class);
-        } catch (Exception e) {
-            return;   // ignore malformed JSON
+        // Inspect type without fully deserializing
+        JsonNode root = objectMapper.readTree(textMessage.getPayload());
+        String type = root.has("type") ? root.get("type").asText() : "chat";
+
+        if (type.startsWith("call-")) {
+            // Signaling — forward as-is to recipient with `from` added
+            if (!root.has("to")) return;
+            String to = root.get("to").asText();
+            ObjectNode forwarded =
+                    ((ObjectNode) root).put("from", sender);
+            sendToUser(to, forwarded.toString());
+            return;
         }
+
+        // ── existing chat logic (encrypt, persist, route) ──
+        IncomingMessage incoming = objectMapper.treeToValue(root, IncomingMessage.class);
 
         if (incoming.to() == null || incoming.to().isBlank()
             || incoming.content() == null || incoming.content().isBlank()) {
-            return;   // missing fields
+            return;
         }
 
-        // persist
-        Message saved = messageRepository.save(new Message(sender, incoming.to(), incoming.content(), incoming.encryptedKeyForSender(), incoming.encryptedKeyForRecipient()));
+        Message saved = messageRepository.save(new Message(
+            sender, incoming.to(), incoming.content(),
+            incoming.encryptedKeyForSender(), incoming.encryptedKeyForRecipient()
+        ));
 
-        // build outgoing payload
         OutgoingMessage out = new OutgoingMessage(
-            saved.getSender(),
-            saved.getRecipient(),
-            saved.getContent(),
-            saved.getEncryptedKeyForSender(),
-            saved.getEncryptedKeyForRecipient(),
+            saved.getSender(), saved.getRecipient(), saved.getContent(),
+            saved.getEncryptedKeyForSender(), saved.getEncryptedKeyForRecipient(),
             saved.getSentAt()
         );
         String payload = objectMapper.writeValueAsString(out);
 
-        // deliver to recipient AND echo to sender (so their UI can display)
-        Set<String> targets = new HashSet<>();
+        java.util.Set<String> targets = new java.util.HashSet<>();
         targets.add(incoming.to());
         targets.add(sender);
+        for (String username : targets) sendToUser(username, payload);
 
-        for (String username : targets) {
-            sendToUser(username, payload);
-        }
         boolean recipientOnline = sessionsByUser.containsKey(incoming.to())
-        && !sessionsByUser.get(incoming.to()).isEmpty();
+                && !sessionsByUser.get(incoming.to()).isEmpty();
         if (!recipientOnline) {
-            pushNotificationService.sendToUser(
-                    incoming.to(),
-                    "Iris",
-                    "New message from " + sender
-            );
+            pushNotificationService.sendToUser(incoming.to(), "Iris", "New message from " + sender);
         }
     }
+
 
     private void sendToUser(String username, String payload) throws IOException {
         Set<WebSocketSession> userSessions = sessionsByUser.get(username);
