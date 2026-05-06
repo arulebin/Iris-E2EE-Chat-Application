@@ -118,14 +118,18 @@ function App() {
   }
 
   // ── ensure keypair after login ───────────────────────────────────
+  // password is read from closure; intentionally not in deps so the effect
+  // doesn't re-fire on every keystroke. After login it's already set; on
+  // page reload IDB usually fast-paths branch 1 before the password matters.
   useEffect(() => {
     if (!token || !me) return;
-    ensureKeyPair(me, token)
+    ensureKeyPair(me, password, token)
       .then(({ privateKey, publicKey }) => {
         setPrivateKey(privateKey);
         setMyPublicKey(publicKey);
       })
       .catch((err) => console.error("Key setup failed:", err));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, me]);
 
   // ── handler: pick a recipient (clears stale key + fetches the new one) ──

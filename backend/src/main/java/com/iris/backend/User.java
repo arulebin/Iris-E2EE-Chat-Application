@@ -25,6 +25,11 @@ public class User {
     @Column(columnDefinition = "TEXT")
     private String publicKey;
 
+    @Column(columnDefinition = "TEXT")
+    private String encryptedPrivateKey;
+
+    @Column(columnDefinition = "TEXT")
+    private String keySalt;
     // JPA requires a no-arg constructor (reflection)
     protected User() { }
 
@@ -40,4 +45,8 @@ public class User {
     public Instant getCreatedAt() { return createdAt; }
     public String getPublicKey() { return publicKey; }
     public void setPublicKey(String publicKey) { this.publicKey = publicKey; }
+    public String getEncryptedPrivateKey() { return encryptedPrivateKey; }
+    public void setEncryptedPrivateKey(String encryptedPrivateKey) { this.encryptedPrivateKey = encryptedPrivateKey; }
+    public String getKeySalt() { return keySalt; }
+    public void setKeySalt(String keySalt) { this.keySalt = keySalt; }
 }

@@ -23,11 +23,13 @@ public class KeyController {
         User user = userRepository.findByUsername(auth.getName())
                 .orElseThrow();
         user.setPublicKey(req.publicKey());
+        if (req.encryptedPrivateKey() != null) user.setEncryptedPrivateKey(req.encryptedPrivateKey());
+        if (req.keySalt() != null) user.setKeySalt(req.keySalt());
         userRepository.save(user);
         return ResponseEntity.ok().build();
     }
 
-    public static record PublicKeyRequest(String publicKey) { }
+    public static record PublicKeyRequest(String publicKey, String encryptedPrivateKey, String keySalt ) { }
 
     @GetMapping("/{username}")
     public ResponseEntity<String> getKey(@PathVariable String username) {
@@ -37,5 +39,21 @@ public class KeyController {
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
+
+    @GetMapping("/me")
+    public MyKeysResponse getMyKeys(Authentication auth) {
+        User user = userRepository.findByUsername(auth.getName())
+                .orElseThrow();
+        return new MyKeysResponse(
+            user.getPublicKey(),
+            user.getEncryptedPrivateKey(),
+            user.getKeySalt()
+        );
+    }
+    public static record MyKeysResponse(
+        String publicKey,
+        String encryptedPrivateKey,
+        String keySalt
+    ) { }
 
 }
