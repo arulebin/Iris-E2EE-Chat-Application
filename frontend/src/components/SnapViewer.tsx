@@ -10,12 +10,9 @@ type Props = {
   onConsumed: () => void; // fired after the bytes are loaded — caller should mark "viewed" locally
 };
 
-const IMAGE_DURATION_MS = 5000;
-
 export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0); // 0..1 for the image timer
 
   // Guards: the GET to /api/media/{id} causes the server to mark this snap as
   // consumed and delete the file. We must NEVER fire that fetch twice for the
@@ -67,24 +64,6 @@ export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Pr
     };
   }, [mediaId, token]);
 
-  // 5-second auto-close for images. Videos close when the user does (or playback ends).
-  useEffect(() => {
-    if (!src || isVideo) return;
-    const start = performance.now();
-    let raf = 0;
-    const tick = (now: number) => {
-      const p = Math.min((now - start) / IMAGE_DURATION_MS, 1);
-      setProgress(p);
-      if (p >= 1) {
-        onClose();
-        return;
-      }
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [src, isVideo, onClose]);
-
   return (
     <div
       className="fixed inset-0 bg-black z-50 flex items-center justify-center"
@@ -122,16 +101,6 @@ export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Pr
           className="max-w-full max-h-full object-contain"
           onClick={(e) => e.stopPropagation()}
         />
-      )}
-
-      {/* Image timer bar */}
-      {src && !isVideo && !error && (
-        <div className="absolute top-0 inset-x-0 h-1 bg-white/20">
-          <div
-            className="h-full bg-white"
-            style={{ width: `${progress * 100}%` }}
-          />
-        </div>
       )}
     </div>
   );
