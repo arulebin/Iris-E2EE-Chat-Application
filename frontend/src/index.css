@@ -1,1 +1,26 @@
 @import "tailwindcss";
+
+/* Chatx design tokens — used as bg-bg, text-navy, bg-primary, etc.
+   Tailwind v4 picks these up from @theme automatically. */
+@theme {
+  --color-bg: #dce6f0;
+  --color-card: #ffffff;
+  --color-primary: #1a6bff;
+  --color-primary-hover: #0f5ce0;
+  --color-navy: #1f2a44;
+  --color-navy-muted: #2a3654;
+  --color-muted: #90a0b5;
+  --color-muted-soft: #b4c0d2;
+  --color-online: #22c55e;
+
+  --font-sans: "Nunito Sans", "Inter", system-ui, -apple-system, sans-serif;
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-navy);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

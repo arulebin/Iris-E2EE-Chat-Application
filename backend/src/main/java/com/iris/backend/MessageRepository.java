@@ -17,4 +17,6 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
         ORDER BY m.sentAt ASC
     """)
     List<Message> findConversation(@Param("a") String a, @Param("b") String b);
+
+    java.util.Optional<Message> findByMediaId(String mediaId);
 }

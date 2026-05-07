@@ -95,19 +95,26 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         // ── existing chat logic (encrypt, persist, route) ──
         IncomingMessage incoming = objectMapper.treeToValue(root, IncomingMessage.class);
 
-        if (incoming.to() == null || incoming.to().isBlank()
-            || incoming.content() == null || incoming.content().isBlank()) {
-            return;
-        }
+        // Valid message must have a recipient AND either text content or a mediaId.
+        if (incoming.to() == null || incoming.to().isBlank()) return;
+        boolean hasText = incoming.content() != null && !incoming.content().isBlank();
+        boolean hasMedia = incoming.mediaId() != null && !incoming.mediaId().isBlank();
+        if (!hasText && !hasMedia) return;
 
         Message saved = messageRepository.save(new Message(
-            sender, incoming.to(), incoming.content(),
-            incoming.encryptedKeyForSender(), incoming.encryptedKeyForRecipient()
+            sender, incoming.to(),
+            hasText ? incoming.content() : "",
+            incoming.encryptedKeyForSender(), incoming.encryptedKeyForRecipient(),
+            hasMedia ? incoming.mediaId() : null,
+            hasMedia ? incoming.mimeType() : null,
+            hasMedia && incoming.viewOnceFlag()
         ));
 
         OutgoingMessage out = new OutgoingMessage(
             saved.getSender(), saved.getRecipient(), saved.getContent(),
             saved.getEncryptedKeyForSender(), saved.getEncryptedKeyForRecipient(),
+            saved.getMediaId(), saved.getMimeType(),
+            saved.isViewOnce(), saved.getViewedAt(),
             saved.getSentAt()
         );
         String payload = objectMapper.writeValueAsString(out);

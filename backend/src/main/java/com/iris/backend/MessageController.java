@@ -22,7 +22,18 @@ public class MessageController {
         String me = auth.getName();
 
         return messageRepository.findConversation(me, with).stream()
-            .map(m -> new OutgoingMessage(m.getSender(), m.getRecipient(), m.getContent(), m.getEncryptedKeyForSender(), m.getEncryptedKeyForRecipient(), m.getSentAt()))
+            .map(m -> new OutgoingMessage(
+                m.getSender(),
+                m.getRecipient(),
+                m.getContent(),
+                m.getEncryptedKeyForSender(),
+                m.getEncryptedKeyForRecipient(),
+                m.getMediaId(),
+                m.getMimeType(),
+                m.isViewOnce(),
+                m.getViewedAt(),
+                m.getSentAt()
+            ))
             .toList();
     }
 

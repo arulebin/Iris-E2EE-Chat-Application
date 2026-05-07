@@ -23,7 +23,7 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-function base64ToUint8(b64: string): Uint8Array {
+function base64ToUint8(b64: string): Uint8Array<ArrayBuffer> {
   const binary = atob(b64)
   const buffer = new ArrayBuffer(binary.length)        // explicit ArrayBuffer (not ArrayBufferLike)
   const bytes = new Uint8Array(buffer)
@@ -39,7 +39,7 @@ function base64ToUint8(b64: string): Uint8Array {
  * Derive a 256-bit AES-GCM key from (password, salt) via PBKDF2-SHA256.
  * The returned key is non-extractable — it can encrypt/decrypt but never leaves Web Crypto.
  */
-async function deriveKek(password: string, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveKek(password: string, salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
   const baseKey = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(password),
@@ -122,7 +122,7 @@ export async function ensureKeyPair(username: string, password: string, token: s
   // Branches 2 & 3 both need to derive a KEK
   if (!password) throw new Error('Password required to unlock or create keypair — log in again')
 
-  const meRes = await fetch('http://localhost:8080/api/keys/me', {
+  const meRes = await fetch('/api/keys/me', {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!meRes.ok) throw new Error(`Failed to fetch own keys: ${meRes.status}`)
@@ -150,11 +150,11 @@ export async function ensureKeyPair(username: string, password: string, token: s
   await set(privDbKey, privateJwk)
   await set(pubDbKey,  publicJwk)
 
-  const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES))
+  const salt = crypto.getRandomValues(new Uint8Array(new ArrayBuffer(SALT_BYTES)))
   const kek = await deriveKek(password, salt)
   const encryptedPrivateKey = await wrapPrivateJwk(JSON.stringify(privateJwk), kek)
 
-  const res = await fetch('http://localhost:8080/api/keys', {
+  const res = await fetch('/api/keys', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
@@ -175,7 +175,7 @@ export async function ensureKeyPair(username: string, password: string, token: s
  * Fetch and import another user's public key.
  */
 export async function fetchPublicKey(username: string, token: string): Promise<CryptoKey> {
-  const res = await fetch(`http://localhost:8080/api/keys/${encodeURIComponent(username)}`, {
+  const res = await fetch(`/api/keys/${encodeURIComponent(username)}`, {
     headers: { Authorization: `Bearer ${token}` }
   })
   if (!res.ok) throw new Error(`Failed to fetch public key for ${username}: ${res.status}`)

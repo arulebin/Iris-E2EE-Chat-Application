@@ -7,48 +7,23 @@ import {
 } from "./crypto";
 import { enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
+import type { ChatMessage, CallState } from "./types";
+import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
+import { uploadMedia } from "./lib/media";
 
-type ChatMessage = {
-  from: string;
-  to: string;
-  content: string;
-  encryptedKeyForSender?: string | null;
-  encryptedKeyForRecipient?: string | null;
-  sentAt: string;
-};
+import { AppShell } from "./components/AppShell";
+import { Splash } from "./components/Splash";
+import { AuthView } from "./components/AuthView";
+import { ChatListView } from "./components/ChatListView";
+import { ConversationView } from "./components/ConversationView";
+import { SettingsView } from "./components/SettingsView";
+import { IncomingCallModal } from "./components/IncomingCallModal";
+import { CallNoticeBanner } from "./components/CallNoticeBanner";
 
-type CallState =
-  | { kind: 'idle' }
-  | { kind: 'outgoing'; to: string }                              
-  | { kind: 'incoming'; from: string; offer: RTCSessionDescriptionInit }  
-  | { kind: 'active'; peer: string }    
-
-function getUsername(token: string | null): string | null {
-  if (!token) return null;
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return payload.sub as string;
-  } catch {
-    return null;
-  }
-}
-
-function getTokenExpiryMs(token: string | null): number | null {
-  if (!token) return null;
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
-  } catch {
-    return null;
-  }
-}
-
-function isTokenExpired(token: string | null): boolean {
-  const expiryMs = getTokenExpiryMs(token);
-  return expiryMs === null || expiryMs <= Date.now();
-}
+type View = "list" | "chat" | "settings";
 
 function App() {
+  // ── auth state ──────────────────────────────────────────────────
   const [token, setToken] = useState<string | null>(() => {
     const stored = localStorage.getItem("token");
     if (isTokenExpired(stored)) {
@@ -62,42 +37,57 @@ function App() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // ── chat state ──────────────────────────────────────────────────
   const [users, setUsers] = useState<string[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [recipient, setRecipient] = useState("");
   const [input, setInput] = useState("");
   const wsRef = useRef<WebSocket | null>(null);
 
+  // ── crypto state ────────────────────────────────────────────────
   const [privateKey, setPrivateKey] = useState<CryptoKey | null>(null);
   const [myPublicKey, setMyPublicKey] = useState<CryptoKey | null>(null);
   const [recipientPublicKey, setRecipientPublicKey] =
     useState<CryptoKey | null>(null);
+
+  // ── push / brave state ──────────────────────────────────────────
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
   const [isBrave, setIsBrave] = useState(false);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null)
-  const localVideoRef = useRef<HTMLVideoElement | null>(null)
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
-  const remoteVideoRef = useRef<HTMLVideoElement | null>(null)
-  const pcRef = useRef<RTCPeerConnection | null>(null)
-  const pendingIceRef = useRef<RTCIceCandidateInit[]>([])                          
-  const handleSignalRef = useRef<((s: CallSignal) => Promise<void>) | null>(null)
-  const [callState, setCallState] = useState<CallState>({ kind: 'idle' })
-  const [callNotice, setCallNotice] = useState<string | null>(null)
-  // Refs that mirror state used inside ws.onmessage — kept in sync via a deps-less
-  // useEffect below. Using refs lets the WS effect's deps stay [token] so the
-  // socket only reconnects on login/logout, not on every sidebar click.
-  const recipientRef = useRef<string>("")
-  const decryptIncomingRef = useRef<((m: ChatMessage) => Promise<ChatMessage>) | null>(null)
-  const meRef = useRef<string | null>(null)
+
+  // ── call state ──────────────────────────────────────────────────
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  const handleSignalRef = useRef<((s: CallSignal) => Promise<void>) | null>(null);
+  const [callState, setCallState] = useState<CallState>({ kind: "idle" });
+  const [callNotice, setCallNotice] = useState<string | null>(null);
+
+  // ── view routing ────────────────────────────────────────────────
+  const [view, setView] = useState<View>("list");
+  const [showSplash, setShowSplash] = useState(true);
+
+  // Refs read by the long-lived ws.onmessage handler. Synced by a deps-less effect
+  // below so the WS effect's deps stay [token] (no reconnect on sidebar clicks).
+  const recipientRef = useRef<string>("");
+  const decryptIncomingRef = useRef<((m: ChatMessage) => Promise<ChatMessage>) | null>(null);
+  const meRef = useRef<string | null>(null);
+
   const me = getUsername(token);
 
-  // ── auth handlers ────────────────────────────────────────────────
+  // ── splash for ~900ms on initial mount ──────────────────────────
+  useEffect(() => {
+    const id = setTimeout(() => setShowSplash(false), 900);
+    return () => clearTimeout(id);
+  }, []);
+
+  // ── auth handlers ───────────────────────────────────────────────
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     try {
-      const res = await fetch(`http://localhost:8080/auth/${mode}`, {
+      const res = await fetch(`/auth/${mode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
@@ -106,7 +96,7 @@ function App() {
 
       let token: string;
       if (mode === "signup") {
-        const loginRes = await fetch("http://localhost:8080/auth/login", {
+        const loginRes = await fetch("/auth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username, password }),
@@ -122,27 +112,6 @@ function App() {
       setError(err.message ?? "Something went wrong");
     }
   }
-  useEffect(() => {
-    hasExistingSubscription().then(setPushEnabled);
-  }, [token]);
-
-  // ── Brave detection: their default settings block FCM push ─────────
-  useEffect(() => {
-    const nav = navigator as Navigator & { brave?: { isBrave?: () => Promise<boolean> } };
-    nav.brave?.isBrave?.().then(setIsBrave).catch(() => {});
-  }, []);
-
-  // ── auto-logout when the JWT hits its exp timestamp ───────────────
-  useEffect(() => {
-    if (!token) return;
-    const expiryMs = getTokenExpiryMs(token);
-    if (expiryMs === null) return;
-    const id = setTimeout(() => {
-      localStorage.removeItem("token");
-      setToken(null);
-    }, Math.max(0, expiryMs - Date.now()));
-    return () => clearTimeout(id);
-  }, [token]);
 
   function handleLogout() {
     localStorage.removeItem("token");
@@ -153,8 +122,10 @@ function App() {
     setPrivateKey(null);
     setMyPublicKey(null);
     setRecipientPublicKey(null);
+    setView("list");
     wsRef.current?.close();
   }
+
   async function handleEnableNotifications() {
     if (!token) return;
     setPushError(null);
@@ -166,10 +137,30 @@ function App() {
     }
   }
 
-  // ── ensure keypair after login ───────────────────────────────────
+  // ── effects: push, brave, token expiry, keypair, users ──────────
+  useEffect(() => {
+    hasExistingSubscription().then(setPushEnabled);
+  }, [token]);
+
+  useEffect(() => {
+    const nav = navigator as Navigator & { brave?: { isBrave?: () => Promise<boolean> } };
+    nav.brave?.isBrave?.().then(setIsBrave).catch(() => {});
+  }, []);
+
+  // Auto-logout when the JWT hits its exp timestamp
+  useEffect(() => {
+    if (!token) return;
+    const expiryMs = getTokenExpiryMs(token);
+    if (expiryMs === null) return;
+    const id = setTimeout(() => {
+      localStorage.removeItem("token");
+      setToken(null);
+    }, Math.max(0, expiryMs - Date.now()));
+    return () => clearTimeout(id);
+  }, [token]);
+
   // password is read from closure; intentionally not in deps so the effect
-  // doesn't re-fire on every keystroke. After login it's already set; on
-  // page reload IDB usually fast-paths branch 1 before the password matters.
+  // doesn't re-fire on every keystroke.
   useEffect(() => {
     if (!token || !me) return;
     ensureKeyPair(me, password, token)
@@ -181,34 +172,25 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, me]);
 
-  // ── handler: pick a recipient (clears stale key + fetches the new one) ──
-  async function selectRecipient(user: string) {
-    setRecipient(user);
-    setRecipientPublicKey(null); // clear synchronously so a fast send can't use stale key
+  useEffect(() => {
     if (!token) return;
-    try {
-      const key = await fetchPublicKey(user, token);
-      setRecipientPublicKey(key);
-    } catch (err) {
-      console.error(`No key for ${user}:`, err);
-    }
-  }
+    fetch("/api/users", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((res) => (res.ok ? res.json() : []))
+      .then((list: string[]) => setUsers(list))
+      .catch(() => setUsers([]));
+  }, [token]);
 
-  // ── decrypt one incoming/historical message ──────────────────────
+  // ── decrypt one incoming/historical message ─────────────────────
   const decryptIncoming = useCallback(
     async (msg: ChatMessage): Promise<ChatMessage> => {
       if (!privateKey) return msg;
       const encryptedKey =
-        msg.from === me
-          ? msg.encryptedKeyForSender
-          : msg.encryptedKeyForRecipient;
-      if (!encryptedKey) return msg; // legacy / unencrypted
+        msg.from === me ? msg.encryptedKeyForSender : msg.encryptedKeyForRecipient;
+      if (!encryptedKey) return msg;
       try {
-        const plaintext = await decryptMessage(
-          msg.content,
-          encryptedKey,
-          privateKey,
-        );
+        const plaintext = await decryptMessage(msg.content, encryptedKey, privateKey);
         return { ...msg, content: plaintext };
       } catch (err) {
         console.error("Decryption failed", err);
@@ -218,26 +200,12 @@ function App() {
     [privateKey, me],
   );
 
-  // ── fetch user list on login ─────────────────────────────────────
-  useEffect(() => {
-    if (!token) return;
-    fetch("http://localhost:8080/api/users", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => (res.ok ? res.json() : []))
-      .then((list: string[]) => setUsers(list))
-      .catch(() => setUsers([]));
-  }, [token]);
-
-  // ── fetch + decrypt conversation history when recipient changes ─
+  // Fetch + decrypt conversation history when recipient changes
   useEffect(() => {
     if (!token || !recipient.trim() || !privateKey) return;
-    fetch(
-      `http://localhost:8080/api/messages?with=${encodeURIComponent(recipient)}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-      },
-    )
+    fetch(`/api/messages?with=${encodeURIComponent(recipient)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
       .then((res) => (res.ok ? res.json() : []))
       .then(async (history: ChatMessage[]) => {
         const decrypted = await Promise.all(history.map(decryptIncoming));
@@ -246,41 +214,32 @@ function App() {
       .catch(() => setMessages([]));
   }, [token, recipient, privateKey, decryptIncoming]);
 
-  // Sync the refs the WebSocket handler reads from. Deps-less so it runs every
-  // render — same pattern as handleSignalRef. Keeps the WS effect from needing
-  // recipient / decryptIncoming / me in its deps.
+  // Sync refs read by ws.onmessage
   useEffect(() => {
     recipientRef.current = recipient;
     decryptIncomingRef.current = decryptIncoming;
     meRef.current = me;
   });
 
-  // ── WebSocket: connects once on login, stays up until logout ────
+  // WebSocket lifecycle: connects on login, stays up until logout
   useEffect(() => {
     if (!token) return;
-    const ws = new WebSocket(`ws://localhost:8080/ws/chat?token=${token}`);
+    const wsProto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${wsProto}://${location.host}/ws/chat?token=${token}`);
     wsRef.current = ws;
     ws.onopen = () => {
-      console.log("connected");
-      // Tell the server our initial visibility so push fires correctly for backgrounded tabs
       ws.send(JSON.stringify({
-        type: 'visibility',
-        state: document.hidden ? 'hidden' : 'visible',
+        type: "visibility",
+        state: document.hidden ? "hidden" : "visible",
       }));
     };
-    ws.onclose = () => console.log("closed");
-    ws.onerror = (e) => console.error("error", e);
     ws.onmessage = async (e) => {
       try {
         const data = JSON.parse(e.data);
-
-        // ── WebRTC signaling ──
         if (data && typeof data.type === "string" && data.type.startsWith("call-")) {
           await handleSignalRef.current?.(data as CallSignal);
           return;
         }
-
-        // ── chat ──
         const msg = data as ChatMessage;
         const currentMe = meRef.current;
         const currentRecipient = recipientRef.current;
@@ -298,12 +257,25 @@ function App() {
     return () => ws.close();
   }, [token]);
 
+  // ── recipient selection (from list view) ────────────────────────
+  async function selectRecipient(user: string) {
+    setRecipient(user);
+    setRecipientPublicKey(null);
+    setMessages([]);
+    setView("chat");
+    if (!token) return;
+    try {
+      const key = await fetchPublicKey(user, token);
+      setRecipientPublicKey(key);
+    } catch (err) {
+      console.error(`No key for ${user}:`, err);
+    }
+  }
+
+  // ── send chat message ───────────────────────────────────────────
   async function send() {
     if (input.trim() === "" || recipient.trim() === "") return;
-    if (!myPublicKey || !recipientPublicKey) {
-      console.warn("keys not ready yet");
-      return;
-    }
+    if (!myPublicKey || !recipientPublicKey) return;
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
 
     try {
@@ -322,472 +294,286 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = localStream
+  // ── send a photo or video ───────────────────────────────────────
+  // Server-side encryption at rest (master key on server). The text-encryption
+  // fields are unused here — we send "" as content with no AES wrapper.
+  // viewOnce=true marks the message as a snap; the server will delete the
+  // encrypted file on the recipient's first GET.
+  async function sendMedia(file: File, viewOnce: boolean) {
+    if (!token || !recipient || wsRef.current?.readyState !== WebSocket.OPEN) {
+      throw new Error("Not connected");
     }
-  }, [localStream])
+    const { mediaId, mimeType } = await uploadMedia(file, token);
+    wsRef.current.send(
+      JSON.stringify({
+        to: recipient,
+        content: "",
+        encryptedKeyForSender: null,
+        encryptedKeyForRecipient: null,
+        mediaId,
+        mimeType,
+        viewOnce,
+      }),
+    );
+  }
 
-  useEffect(() => {
-    if (remoteVideoRef.current) {
-      remoteVideoRef.current.srcObject = remoteStream
-    }
-  }, [remoteStream])
+  // After the recipient consumes a snap, flip its viewedAt locally so the
+  // bubble switches to "Snap viewed" without waiting for a refetch.
+  function markSnapViewed(key: string) {
+    setMessages((prev) =>
+      prev.map((m) =>
+        `${m.from}|${m.sentAt}|${m.mediaId ?? ""}` === key
+          ? { ...m, viewedAt: m.viewedAt ?? new Date().toISOString() }
+          : m,
+      ),
+    );
+  }
 
+  // ── camera / call lifecycle ─────────────────────────────────────
   async function startCamera() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: true,
-      })
-      setLocalStream(stream)
-      return stream
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      setLocalStream(stream);
+      return stream;
     } catch (err) {
-      console.error('Camera/mic permission denied or unavailable', err)
-      return null
+      console.error("Camera/mic permission denied or unavailable", err);
+      return null;
     }
   }
 
   function stopCamera() {
-    localStream?.getTracks().forEach(track => track.stop())
-    setLocalStream(null)
+    localStream?.getTracks().forEach((t) => t.stop());
+    setLocalStream(null);
   }
 
-  // ── WebRTC call lifecycle ───────────────────────────────────────
-
-  /** Local cleanup. Caller is responsible for notifying the other side via call-end. */
   function teardownCall() {
-    pcRef.current?.close()
-    pcRef.current = null
-    pendingIceRef.current = []
-    setRemoteStream(null)
-    stopCamera()
-    setCallState({ kind: 'idle' })
+    pcRef.current?.close();
+    pcRef.current = null;
+    pendingIceRef.current = [];
+    setRemoteStream(null);
+    stopCamera();
+    setCallState({ kind: "idle" });
   }
 
-  /** Outgoing: alice clicks 📞 Call. */
   async function startCall() {
-    if (!recipient || !wsRef.current) return
-    if (callState.kind !== 'idle') return
+    if (!recipient || !wsRef.current) return;
+    if (callState.kind !== "idle") return;
+    setCallState({ kind: "outgoing", to: recipient });
 
-    setCallState({ kind: 'outgoing', to: recipient })
-
-    let stream = localStream
+    let stream = localStream;
     if (!stream) {
-      stream = await startCamera()
+      stream = await startCamera();
       if (!stream) {
-        setCallState({ kind: 'idle' })
-        return
+        setCallState({ kind: "idle" });
+        return;
       }
     }
 
-    const pc = createPeerConnection(wsRef.current, recipient, setRemoteStream)
-    pcRef.current = pc
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream!))
+    const pc = createPeerConnection(wsRef.current, recipient, setRemoteStream);
+    pcRef.current = pc;
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
 
-    const offer = await pc.createOffer()
-    await pc.setLocalDescription(offer)
-
-    wsRef.current.send(
-      JSON.stringify({ type: 'call-offer', to: recipient, payload: offer })
-    )
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    wsRef.current.send(JSON.stringify({ type: "call-offer", to: recipient, payload: offer }));
   }
 
-  /** Incoming-accept: bob clicks Accept on the modal. */
   async function acceptCall() {
-    if (callState.kind !== 'incoming') return
-    if (!wsRef.current) return
-    const { from, offer } = callState
+    if (callState.kind !== "incoming") return;
+    if (!wsRef.current) return;
+    const { from, offer } = callState;
 
-    let stream = localStream
+    let stream = localStream;
     if (!stream) {
-      stream = await startCamera()
+      stream = await startCamera();
       if (!stream) {
-        wsRef.current.send(JSON.stringify({ type: 'call-end', to: from }))
-        setCallState({ kind: 'idle' })
-        return
+        wsRef.current.send(JSON.stringify({ type: "call-end", to: from }));
+        setCallState({ kind: "idle" });
+        return;
       }
     }
 
-    const pc = createPeerConnection(wsRef.current, from, setRemoteStream)
-    pcRef.current = pc
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream!))
+    const pc = createPeerConnection(wsRef.current, from, setRemoteStream);
+    pcRef.current = pc;
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
 
-    await pc.setRemoteDescription(offer)
-
+    await pc.setRemoteDescription(offer);
     for (const c of pendingIceRef.current) {
-      try { await pc.addIceCandidate(c) } catch (e) { console.error('addIceCandidate', e) }
+      try { await pc.addIceCandidate(c); } catch (e) { console.error("addIceCandidate", e); }
     }
-    pendingIceRef.current = []
+    pendingIceRef.current = [];
 
-    const answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-
-    wsRef.current.send(JSON.stringify({ type: 'call-answer', to: from, payload: answer }))
-    setCallState({ kind: 'active', peer: from })
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    wsRef.current.send(JSON.stringify({ type: "call-answer", to: from, payload: answer }));
+    setCallState({ kind: "active", peer: from });
   }
 
-  /** Incoming-reject: bob declines without ever setting up a peer connection. */
   function rejectCall() {
-    if (callState.kind !== 'incoming') return
-    wsRef.current?.send(JSON.stringify({ type: 'call-end', to: callState.from }))
-    setCallState({ kind: 'idle' })
+    if (callState.kind !== "incoming") return;
+    wsRef.current?.send(JSON.stringify({ type: "call-end", to: callState.from }));
+    setCallState({ kind: "idle" });
   }
 
-  /** Cancel an outgoing attempt OR hang up an active call. */
   function hangUp() {
-    if (callState.kind === 'outgoing' || callState.kind === 'active') {
-      const peer = callState.kind === 'outgoing' ? callState.to : callState.peer
-      wsRef.current?.send(JSON.stringify({ type: 'call-end', to: peer }))
+    if (callState.kind === "outgoing" || callState.kind === "active") {
+      const peer = callState.kind === "outgoing" ? callState.to : callState.peer;
+      wsRef.current?.send(JSON.stringify({ type: "call-end", to: peer }));
     }
-    teardownCall()
+    teardownCall();
   }
 
   async function handleSignal(signal: CallSignal) {
-    if (signal.type === 'call-offer') {
-      // Busy: politely decline if a call is already in progress
-      if (callState.kind !== 'idle') {
-        wsRef.current?.send(JSON.stringify({ type: 'call-end', to: signal.from }))
-        return
+    if (signal.type === "call-offer") {
+      if (callState.kind !== "idle") {
+        wsRef.current?.send(JSON.stringify({ type: "call-end", to: signal.from }));
+        return;
       }
-      setCallState({ kind: 'incoming', from: signal.from!, offer: signal.payload })
-      return
+      // If we get an offer while sitting on the list view, jump into the chat with the caller
+      if (signal.from && signal.from !== recipient) {
+        selectRecipient(signal.from);
+      }
+      setCallState({ kind: "incoming", from: signal.from!, offer: signal.payload });
+      return;
     }
-
-    if (signal.type === 'call-answer') {
-      const pc = pcRef.current
-      if (!pc) return
-      await pc.setRemoteDescription(signal.payload)
+    if (signal.type === "call-answer") {
+      const pc = pcRef.current;
+      if (!pc) return;
+      await pc.setRemoteDescription(signal.payload);
       for (const c of pendingIceRef.current) {
-        try { await pc.addIceCandidate(c) } catch (e) { console.error('addIceCandidate', e) }
+        try { await pc.addIceCandidate(c); } catch (e) { console.error("addIceCandidate", e); }
       }
-      pendingIceRef.current = []
-      if (callState.kind === 'outgoing') {
-        setCallState({ kind: 'active', peer: callState.to })
+      pendingIceRef.current = [];
+      if (callState.kind === "outgoing") {
+        setCallState({ kind: "active", peer: callState.to });
       }
-      return
+      return;
     }
-
-    if (signal.type === 'call-ice') {
-      const pc = pcRef.current
+    if (signal.type === "call-ice") {
+      const pc = pcRef.current;
       if (pc && pc.remoteDescription) {
-        try { await pc.addIceCandidate(signal.payload) } catch (e) { console.error('addIceCandidate', e) }
+        try { await pc.addIceCandidate(signal.payload); } catch (e) { console.error("addIceCandidate", e); }
       } else {
-        pendingIceRef.current.push(signal.payload)
+        pendingIceRef.current.push(signal.payload);
       }
-      return
+      return;
     }
-
-    if (signal.type === 'call-end') {
-      // Surface a reason for the caller / receiver so the UI doesn't just go silent
-      if (callState.kind === 'outgoing') {
-        setCallNotice(`${callState.to} is busy or declined the call`)
-      } else if (callState.kind === 'incoming') {
-        setCallNotice(`${callState.from} canceled the call`)
-      } else if (callState.kind === 'active') {
-        setCallNotice(`${callState.peer} ended the call`)
-      }
-      teardownCall()
-      return
+    if (signal.type === "call-end") {
+      if (callState.kind === "outgoing") setCallNotice(`${callState.to} is busy or declined the call`);
+      else if (callState.kind === "incoming") setCallNotice(`${callState.from} canceled the call`);
+      else if (callState.kind === "active") setCallNotice(`${callState.peer} ended the call`);
+      teardownCall();
+      return;
     }
   }
 
-  // ── auto-dismiss the call notice after 4 seconds ─────────────────
+  // Keep the ref pointing at the latest closure of handleSignal
   useEffect(() => {
-    if (!callNotice) return
-    const id = setTimeout(() => setCallNotice(null), 4000)
-    return () => clearTimeout(id)
-  }, [callNotice])
+    handleSignalRef.current = handleSignal;
+  });
 
-  // ── Page Visibility: tell the server when this tab is backgrounded ─
+  // Auto-dismiss the call notice
   useEffect(() => {
-    if (!token) return
+    if (!callNotice) return;
+    const id = setTimeout(() => setCallNotice(null), 4000);
+    return () => clearTimeout(id);
+  }, [callNotice]);
+
+  // Page Visibility → push trigger
+  useEffect(() => {
+    if (!token) return;
     const onVisibility = () => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({
-          type: 'visibility',
-          state: document.hidden ? 'hidden' : 'visible',
-        }))
+          type: "visibility",
+          state: document.hidden ? "hidden" : "visible",
+        }));
       }
-    }
-    document.addEventListener('visibilitychange', onVisibility)
-    return () => document.removeEventListener('visibilitychange', onVisibility)
-  }, [token])
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [token]);
 
+  // ── render ──────────────────────────────────────────────────────
 
-  // Keep the ref updated with the latest closure so ws.onmessage uses fresh state.
-  useEffect(() => {
-    handleSignalRef.current = handleSignal
-  })
-  
-  // ── LOGIN / SIGNUP VIEW ──────────────────────────────────────────
+  if (showSplash) return <Splash />;
+
   if (!token) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4">
-        <div className="w-full max-w-sm bg-white border border-slate-200 rounded-2xl shadow-sm p-8">
-          <h1 className="text-3xl font-bold text-slate-900">Iris</h1>
-          <p className="text-slate-500 mb-6 text-sm">
-            Private chat for you and your circle.
-          </p>
-
-          <h2 className="text-xl font-semibold text-slate-800 mb-4">
-            {mode === "login" ? "Log in" : "Create account"}
-          </h2>
-
-          <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Username"
-              required
-              autoFocus
-              className="px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
-              required
-              className="px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <button
-              type="submit"
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 rounded-lg transition"
-            >
-              {mode === "login" ? "Log in" : "Sign up"}
-            </button>
-          </form>
-
-          {error && <p className="text-red-600 text-sm mt-3">{error}</p>}
-
-          <p className="text-sm text-slate-500 mt-6 text-center">
-            {mode === "login" ? "No account? " : "Already have one? "}
-            <button
-              onClick={() => {
-                setMode(mode === "login" ? "signup" : "login");
-                setError(null);
-              }}
-              className="text-indigo-600 hover:underline"
-            >
-              {mode === "login" ? "Sign up" : "Log in"}
-            </button>
-          </p>
-        </div>
-      </div>
+      <AuthView
+        mode={mode}
+        username={username}
+        password={password}
+        error={error}
+        onUsernameChange={setUsername}
+        onPasswordChange={setPassword}
+        onSubmit={handleSubmit}
+        onModeChange={(next) => {
+          setMode(next);
+          setError(null);
+        }}
+      />
     );
   }
 
-  // ── CHAT VIEW (sidebar + main panel) ─────────────────────────────
   return (
-    <div className="min-h-screen flex bg-slate-50">
-      {/* SIDEBAR */}
-      <aside className="w-64 border-r border-slate-200 bg-white flex flex-col">
-        <div className="p-4 border-b border-slate-200">
-          <h1 className="text-xl font-bold text-slate-900">Iris</h1>
-          <p className="text-xs text-slate-500">
-            Signed in as <span className="font-medium">{me}</span>
-          </p>
-        </div>
+    <AppShell>
+      {callNotice && <CallNoticeBanner message={callNotice} />}
 
-        <nav className="flex-1 overflow-y-auto p-2">
-          {users.length === 0 ? (
-            <p className="text-sm text-slate-400 px-3 py-2">
-              No other users yet
-            </p>
-          ) : (
-            users.map((u) => (
-              <button
-                key={u}
-                onClick={() => selectRecipient(u)}
-                className={`w-full text-left px-3 py-2 rounded-lg transition ${
-                  recipient === u
-                    ? "bg-indigo-100 text-indigo-700 font-medium"
-                    : "hover:bg-slate-100 text-slate-700"
-                }`}
-              >
-                {u}
-              </button>
-            ))
-          )}
-        </nav>
-        <div className="p-4 border-t border-slate-200 flex flex-col gap-2">
-          {!pushEnabled && (
-            <button
-              onClick={handleEnableNotifications}
-              className="text-sm text-indigo-600 hover:underline text-left"
-            >
-              🔔 Enable notifications
-            </button>
-          )}
-          {pushEnabled && (
-            <p className="text-xs text-slate-400">🔔 Notifications on</p>
-          )}
-          {pushError && <p className="text-xs text-red-500">{pushError}</p>}
-          {isBrave && !pushEnabled && (
-            <p className="text-xs text-slate-500 leading-snug">
-              Brave: enable Google services for push at{" "}
-              <span className="font-mono">brave://settings/privacy</span>
-            </p>
-          )}
-          <button
-            onClick={handleLogout}
-            className="text-sm text-slate-500 hover:text-slate-900 text-left"
-          >
-            Log out
-          </button>
-        </div>
-      </aside>
-
-      {/* TRANSIENT CALL NOTICE (busy / declined / hung up) */}
-      {callNotice && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-4 py-2 rounded-lg shadow-lg z-40 text-sm">
-          {callNotice}
-        </div>
+      {callState.kind === "incoming" && (
+        <IncomingCallModal
+          from={callState.from}
+          onAccept={acceptCall}
+          onReject={rejectCall}
+        />
       )}
 
-      {/* INCOMING CALL MODAL */}
-      {callState.kind === 'incoming' && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 shadow-xl max-w-sm w-full mx-4">
-            <h2 className="text-lg font-semibold text-slate-900">
-              📞 Incoming call from {callState.from}
-            </h2>
-            <p className="text-sm text-slate-500 mt-1">
-              Camera and microphone will turn on if you accept.
-            </p>
-            <div className="flex gap-2 mt-4 justify-end">
-              <button
-                onClick={rejectCall}
-                className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-4 py-1.5 rounded-lg text-sm font-medium"
-              >
-                Reject
-              </button>
-              <button
-                onClick={acceptCall}
-                className="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded-lg text-sm font-medium"
-              >
-                Accept
-              </button>
-            </div>
-          </div>
-        </div>
+      {view === "settings" && (
+        <SettingsView
+          me={me}
+          pushEnabled={pushEnabled}
+          pushError={pushError}
+          isBrave={isBrave}
+          onBack={() => setView("list")}
+          onEnableNotifications={handleEnableNotifications}
+          onLogout={handleLogout}
+        />
       )}
 
-      {/* MAIN */}
-      <div className="flex-1 flex flex-col">
-        <header className="border-b border-slate-200 bg-white px-6 py-3 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-900">
-            {recipient
-              ? `Chat with ${recipient}`
-              : "Select someone to chat with"}
-          </h2>
-          <div className="flex gap-2">
-            {callState.kind === 'idle' && recipient && (
-              <>
-                <button
-                  onClick={startCall}
-                  className="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded-lg text-sm"
-                >
-                  📞 Call {recipient}
-                </button>
-                {localStream && (
-                  <button
-                    onClick={stopCamera}
-                    className="bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1 rounded-lg text-sm"
-                  >
-                    Camera off
-                  </button>
-                )}
-              </>
-            )}
-            {callState.kind === 'outgoing' && (
-              <button
-                onClick={hangUp}
-                className="bg-slate-500 hover:bg-slate-600 text-white px-3 py-1 rounded-lg text-sm"
-              >
-                Cancel call to {callState.to}…
-              </button>
-            )}
-            {callState.kind === 'active' && (
-              <button
-                onClick={hangUp}
-                className="bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded-lg text-sm"
-              >
-                Hang up
-              </button>
-            )}
-          </div>
-        </header>
+      {view === "chat" && recipient && (
+        <ConversationView
+          peer={recipient}
+          me={me}
+          token={token}
+          messages={messages}
+          input={input}
+          onInputChange={setInput}
+          onSend={send}
+          onSendMedia={sendMedia}
+          onMarkSnapViewed={markSnapViewed}
+          recipientPublicKeyReady={!!recipientPublicKey}
+          callState={callState}
+          localStream={localStream}
+          remoteStream={remoteStream}
+          onStartCall={startCall}
+          onHangUp={hangUp}
+          onBack={() => {
+            setView("list");
+            setRecipient("");
+          }}
+        />
+      )}
 
-        <main className="flex-1 overflow-y-auto px-6 py-4">
-          {(localStream || remoteStream) && (
-            <div className="max-w-2xl mx-auto mb-4 grid grid-cols-2 gap-2">
-              {remoteStream && (
-                <video
-                  ref={remoteVideoRef}
-                  autoPlay
-                  playsInline
-                  className="w-full rounded-lg bg-black aspect-video"
-                />
-              )}
-              {localStream && (
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full rounded-lg bg-black aspect-video"
-                />
-              )}
-            </div>
-          )}
-          <ul className="flex flex-col gap-2 max-w-2xl mx-auto">
-            {messages.map((m, i) => (
-              <li
-                key={i}
-                className={`max-w-md px-3 py-2 rounded-2xl shadow-sm ${
-                  m.from === me
-                    ? "self-end bg-indigo-600 text-white rounded-br-sm"
-                    : "self-start bg-white border border-slate-200 text-slate-800 rounded-bl-sm"
-                }`}
-              >
-                {m.content}
-              </li>
-            ))}
-          </ul>
-        </main>
-
-        {recipient && (
-          <footer className="border-t border-slate-200 bg-white px-6 py-3">
-            <div className="max-w-2xl mx-auto flex gap-2">
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && send()}
-                placeholder={`Message ${recipient}`}
-                disabled={!recipientPublicKey}
-                className="flex-1 px-3 py-2 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100"
-              />
-              <button
-                onClick={send}
-                disabled={!recipientPublicKey || !myPublicKey}
-                className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white font-medium px-4 py-2 rounded-lg transition"
-              >
-                Send
-              </button>
-            </div>
-            {!recipientPublicKey && (
-              <p className="text-xs text-slate-400 max-w-2xl mx-auto mt-1">
-                {recipient} hasn't uploaded a public key yet — ask them to log
-                in.
-              </p>
-            )}
-          </footer>
-        )}
-      </div>
-    </div>
+      {(view === "list" || (view === "chat" && !recipient)) && (
+        <ChatListView
+          me={me}
+          users={users}
+          recipient={recipient}
+          onSelectUser={selectRecipient}
+          onOpenSettings={() => setView("settings")}
+        />
+      )}
+    </AppShell>
   );
 }
 
