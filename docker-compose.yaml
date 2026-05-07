@@ -1,0 +1,23 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      JWT_SECRET: ${JWT_SECRET}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+      VAPID_SUBJECT: ${VAPID_SUBJECT}
+      SPRING_DATASOURCE_URL: "jdbc:h2:file:/app/data/iris;AUTO_SERVER=TRUE"
+    volumes:
+      - iris-data:/app/data
+    # No port mapping — only the frontend can reach it.
+    # Add `ports: ["8080:8080"]` temporarily if you need to hit it directly for debugging.
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"   # browser hits http://localhost:8080
+    depends_on:
+      - backend
+
+volumes:
+  iris-data:
