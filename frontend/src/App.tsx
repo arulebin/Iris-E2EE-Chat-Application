@@ -10,6 +10,7 @@ import { createPeerConnection, type CallSignal } from "./webrtc";
 import type { ChatMessage, CallState } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { uploadMedia } from "./lib/media";
+import { apiBase, wsURL } from "./lib/config";
 
 import { AppShell } from "./components/AppShell";
 import { Splash } from "./components/Splash";
@@ -87,7 +88,7 @@ function App() {
     e.preventDefault();
     setError(null);
     try {
-      const res = await fetch(`/auth/${mode}`, {
+      const res = await fetch(`${apiBase}/auth/${mode}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
@@ -96,7 +97,7 @@ function App() {
 
       let token: string;
       if (mode === "signup") {
-        const loginRes = await fetch("/auth/login", {
+        const loginRes = await fetch(`${apiBase}/auth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ username, password }),
@@ -174,7 +175,7 @@ function App() {
 
   useEffect(() => {
     if (!token) return;
-    fetch("/api/users", {
+    fetch(`${apiBase}/api/users`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : []))
@@ -203,7 +204,7 @@ function App() {
   // Fetch + decrypt conversation history when recipient changes
   useEffect(() => {
     if (!token || !recipient.trim() || !privateKey) return;
-    fetch(`/api/messages?with=${encodeURIComponent(recipient)}`, {
+    fetch(`${apiBase}/api/messages?with=${encodeURIComponent(recipient)}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : []))
@@ -224,8 +225,7 @@ function App() {
   // WebSocket lifecycle: connects on login, stays up until logout
   useEffect(() => {
     if (!token) return;
-    const wsProto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${wsProto}://${location.host}/ws/chat?token=${token}`);
+    const ws = new WebSocket(wsURL(`/ws/chat?token=${token}`));
     wsRef.current = ws;
     ws.onopen = () => {
       ws.send(JSON.stringify({

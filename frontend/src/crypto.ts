@@ -1,4 +1,5 @@
 import { get, set } from 'idb-keyval'
+import { apiBase } from './lib/config'
 
 
 const PBKDF2_ITERATIONS = 600_000 
@@ -122,7 +123,7 @@ export async function ensureKeyPair(username: string, password: string, token: s
   // Branches 2 & 3 both need to derive a KEK
   if (!password) throw new Error('Password required to unlock or create keypair — log in again')
 
-  const meRes = await fetch('/api/keys/me', {
+  const meRes = await fetch(`${apiBase}/api/keys/me`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!meRes.ok) throw new Error(`Failed to fetch own keys: ${meRes.status}`)
@@ -154,7 +155,7 @@ export async function ensureKeyPair(username: string, password: string, token: s
   const kek = await deriveKek(password, salt)
   const encryptedPrivateKey = await wrapPrivateJwk(JSON.stringify(privateJwk), kek)
 
-  const res = await fetch('/api/keys', {
+  const res = await fetch(`${apiBase}/api/keys`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
@@ -175,7 +176,7 @@ export async function ensureKeyPair(username: string, password: string, token: s
  * Fetch and import another user's public key.
  */
 export async function fetchPublicKey(username: string, token: string): Promise<CryptoKey> {
-  const res = await fetch(`/api/keys/${encodeURIComponent(username)}`, {
+  const res = await fetch(`${apiBase}/api/keys/${encodeURIComponent(username)}`, {
     headers: { Authorization: `Bearer ${token}` }
   })
   if (!res.ok) throw new Error(`Failed to fetch public key for ${username}: ${res.status}`)

@@ -1,3 +1,5 @@
+import { apiBase } from './lib/config'
+
 /**
  * Convert a URL-safe base64 string (VAPID format) to the Uint8Array
  * that PushManager.subscribe expects as `applicationServerKey`.
@@ -32,7 +34,7 @@ export async function enableNotifications(token: string): Promise<PushSubscripti
   const reg = await navigator.serviceWorker.ready
 
   // 3. Get the VAPID public key from our backend
-  const keyRes = await fetch('/api/push/vapid-public-key', {
+  const keyRes = await fetch(`${apiBase}/api/push/vapid-public-key`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!keyRes.ok) throw new Error('Failed to fetch VAPID public key')
@@ -46,7 +48,7 @@ export async function enableNotifications(token: string): Promise<PushSubscripti
   })
 
   // 5. Send subscription to backend (its toJSON() matches our DTO shape)
-  const upRes = await fetch('/api/push/subscribe', {
+  const upRes = await fetch(`${apiBase}/api/push/subscribe`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

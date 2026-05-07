@@ -1,3 +1,5 @@
+import { apiBase } from "./config";
+
 // 50MB cap matches the backend's MediaController.MAX_BYTES.
 export const MAX_MEDIA_BYTES = 50 * 1024 * 1024;
 
@@ -19,7 +21,7 @@ export async function uploadMedia(file: File, token: string): Promise<UploadedMe
   const form = new FormData();
   form.append("file", file);
 
-  const res = await fetch("/api/media", {
+  const res = await fetch(`${apiBase}/api/media`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: form,
@@ -37,7 +39,7 @@ export async function uploadMedia(file: File, token: string): Promise<UploadedMe
  * Caller is responsible for URL.revokeObjectURL when done.
  */
 export async function fetchMediaObjectURL(mediaId: string, token: string): Promise<string> {
-  const res = await fetch(`/api/media/${encodeURIComponent(mediaId)}`, {
+  const res = await fetch(`${apiBase}/api/media/${encodeURIComponent(mediaId)}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`Media fetch failed: ${res.status}`);
