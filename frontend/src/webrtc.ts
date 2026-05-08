@@ -52,7 +52,7 @@ export function createPeerConnection(
     }
   }
 
-  let stream = new MediaStream()
+  const stream = new MediaStream()
 
   pc.ontrack = (e) => {
     if (e.streams && e.streams[0]) {
@@ -64,7 +64,15 @@ export function createPeerConnection(
   }
 
   pc.onconnectionstatechange = () => {
-    console.log('[WebRTC] state:', pc.connectionState)
+    console.log('[WebRTC] connection state:', pc.connectionState)
+  }
+  
+  pc.oniceconnectionstatechange = () => {
+    console.log('[WebRTC] ice state:', pc.iceConnectionState)
+  }
+
+  pc.onicegatheringstatechange = () => {
+    console.log('[WebRTC] gathering state:', pc.iceGatheringState)
   }
 
   return pc

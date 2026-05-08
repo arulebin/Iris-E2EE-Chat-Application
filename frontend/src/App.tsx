@@ -491,10 +491,12 @@ function App() {
     }
     if (signal.type === "call-ice") {
       const pc = pcRef.current;
-      if (pc && pc.remoteDescription) {
-        try { await pc.addIceCandidate(signal.payload); } catch (e) { console.error("addIceCandidate", e); }
-      } else {
-        pendingIceRef.current.push(signal.payload);
+      if (pc) {
+        if (pc.remoteDescription) {
+          try { await pc.addIceCandidate(signal.payload); } catch (e) { console.error("addIceCandidate", e); }
+        } else {
+          pendingIceRef.current.push(signal.payload);
+        }
       }
       return;
     }
