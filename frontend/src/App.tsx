@@ -491,12 +491,14 @@ function App() {
     }
     if (signal.type === "call-ice") {
       const pc = pcRef.current;
-      if (pc) {
-        if (pc.remoteDescription) {
-          try { await pc.addIceCandidate(signal.payload); } catch (e) { console.error("addIceCandidate", e); }
-        } else {
-          pendingIceRef.current.push(signal.payload);
-        }
+      if (pc && pc.remoteDescription) {
+        // PC exists and remote description is set — add directly
+        try { await pc.addIceCandidate(signal.payload); } catch (e) { console.error("addIceCandidate", e); }
+      } else {
+        // Either: (a) PC hasn't been created yet (incoming call not yet
+        // accepted), or (b) remote description hasn't been set yet.
+        // Queue for later — acceptCall / call-answer handler will flush.
+        pendingIceRef.current.push(signal.payload);
       }
       return;
     }

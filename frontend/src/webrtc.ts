@@ -1,24 +1,35 @@
 // WebRTC helpers — peer connection setup + signal types
+//
+// NOTE: For production, replace the free TURN credentials below with a paid
+// TURN service (e.g. Twilio NTS, Cloudflare Calls, or Metered paid plan).
+// Free TURN relays have limited bandwidth and may stop working without notice.
 
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:openrelay.metered.ca:80' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
+      urls: 'turn:a.relay.metered.ca:80',
+      username: 'e8dd65b92af4d3283aaceab8',
+      credential: 'kMuv3T3wQHOVFdxS'
     },
     {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
+      urls: 'turn:a.relay.metered.ca:80?transport=tcp',
+      username: 'e8dd65b92af4d3283aaceab8',
+      credential: 'kMuv3T3wQHOVFdxS'
     },
     {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
+      urls: 'turn:a.relay.metered.ca:443',
+      username: 'e8dd65b92af4d3283aaceab8',
+      credential: 'kMuv3T3wQHOVFdxS'
+    },
+    {
+      urls: 'turns:a.relay.metered.ca:443?transport=tcp',
+      username: 'e8dd65b92af4d3283aaceab8',
+      credential: 'kMuv3T3wQHOVFdxS'
     }
   ],
 }
