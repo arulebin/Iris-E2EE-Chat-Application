@@ -30,7 +30,10 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
     streamRef.current?.getTracks().forEach((t) => t.stop());
 
     navigator.mediaDevices
-      .getUserMedia({ video: { facingMode: facing }, audio: mode === "video" })
+      .getUserMedia({
+        video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: mode === "video"
+      })
       .then((stream) => {
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());

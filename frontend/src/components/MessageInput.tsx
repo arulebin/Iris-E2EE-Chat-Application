@@ -158,6 +158,7 @@ export function MessageInput({
           <input
             ref={fileInputRef}
             type="file"
+            multiple
             accept="image/*,video/*"
             className="hidden"
             onChange={handleFileInput}

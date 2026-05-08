@@ -44,10 +44,10 @@ export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Pr
         }
         createdUrl = url;
         setSrc(url);
-        if (!consumedRef.current) {
-          consumedRef.current = true;
-          onConsumedRef.current?.();
-        }
+          if (onConsumedRef.current) {
+            consumedRef.current = true;
+            onConsumedRef.current();
+          }
       })
       .catch((err) => {
         if (cancelled) return;
