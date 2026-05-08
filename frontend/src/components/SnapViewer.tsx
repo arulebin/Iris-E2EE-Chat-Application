@@ -14,11 +14,6 @@ export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Pr
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Guards: the GET to /api/media/{id} causes the server to mark this snap as
-  // consumed and delete the file. We must NEVER fire that fetch twice for the
-  // same viewer mount — otherwise the second fetch hits 410 and the UI shows
-  // "already viewed" right after opening.
-  const fetchedRef = useRef(false);
   const consumedRef = useRef(false);
   // onConsumed is captured by ref so its identity changing across parent
   // renders doesn't re-run the fetch effect.
@@ -30,37 +25,30 @@ export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Pr
   const isVideo = !!mimeType?.startsWith("video/");
 
   // Fetch the bytes — server deletes the file as a side effect of this GET.
+  // The mediaCache singleton ensures that even in React 18 Strict Mode
+  // double-renders we don't accidentally drop the image or fire duplicate fetches.
   useEffect(() => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-
     let cancelled = false;
-    let createdUrl: string | null = null;
     fetchMediaObjectURL(mediaId, token)
       .then((url) => {
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        createdUrl = url;
+        if (cancelled) return;
         setSrc(url);
-          if (onConsumedRef.current) {
-            consumedRef.current = true;
-            onConsumedRef.current();
-          }
+        if (onConsumedRef.current && !consumedRef.current) {
+          consumedRef.current = true;
+          onConsumedRef.current();
+        }
       })
       .catch((err) => {
         if (cancelled) return;
         const msg = err?.message ?? "Failed to load";
         setError(
-          msg.includes("410")
+          msg.includes("410") || msg.includes("404")
             ? "This snap has already been viewed."
             : msg
         );
       });
     return () => {
       cancelled = true;
-      if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
   }, [mediaId, token]);
 

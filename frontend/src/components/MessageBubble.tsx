@@ -32,20 +32,14 @@ function MediaContent({
 
   useEffect(() => {
     let cancelled = false;
-    let createdUrl: string | null = null;
     fetchMediaObjectURL(mediaId, token)
       .then((url) => {
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        createdUrl = url;
+        if (cancelled) return;
         setSrc(url);
       })
       .catch((err) => !cancelled && setError(err.message ?? "Failed to load"));
     return () => {
       cancelled = true;
-      if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
   }, [mediaId, token]);
 

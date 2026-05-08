@@ -34,15 +34,28 @@ export async function uploadMedia(file: File, token: string): Promise<UploadedMe
   return res.json();
 }
 
+const mediaCache = new Map<string, Promise<string>>();
+
 /**
  * Fetch an authenticated media blob and return an object URL.
- * Caller is responsible for URL.revokeObjectURL when done.
+ * Caller is responsible for URL.revokeObjectURL when done (or rely on browser cleanup).
  */
-export async function fetchMediaObjectURL(mediaId: string, token: string): Promise<string> {
-  const res = await fetch(`${apiBase}/api/media/${encodeURIComponent(mediaId)}`, {
+export function fetchMediaObjectURL(mediaId: string, token: string): Promise<string> {
+  if (mediaCache.has(mediaId)) {
+    return mediaCache.get(mediaId)!;
+  }
+
+  const promise = fetch(`${apiBase}/api/media/${encodeURIComponent(mediaId)}`, {
     headers: { Authorization: `Bearer ${token}` },
+  }).then(async (res) => {
+    if (!res.ok) throw new Error(`Media fetch failed: ${res.status}`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  }).catch((err) => {
+    mediaCache.delete(mediaId);
+    throw err;
   });
-  if (!res.ok) throw new Error(`Media fetch failed: ${res.status}`);
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
+
+  mediaCache.set(mediaId, promise);
+  return promise;
 }
