@@ -11,7 +11,7 @@ services:
       SPRING_DATASOURCE_URL: "jdbc:h2:file:/app/data/iris;AUTO_SERVER=TRUE"
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
     volumes:
-      - iris-data:/app/data
+      - ./backend/data:/app/data
     # No port mapping — only the frontend can reach it.
   
   frontend:
