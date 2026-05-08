@@ -107,15 +107,18 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             incoming.encryptedKeyForSender(), incoming.encryptedKeyForRecipient(),
             hasMedia ? incoming.mediaId() : null,
             hasMedia ? incoming.mimeType() : null,
-            hasMedia && incoming.viewOnceFlag()
+            hasMedia && incoming.viewOnceFlag(),
+            incoming.replyToId()
         ));
 
         OutgoingMessage out = new OutgoingMessage(
+            saved.getId(),
             saved.getSender(), saved.getRecipient(), saved.getContent(),
             saved.getEncryptedKeyForSender(), saved.getEncryptedKeyForRecipient(),
             saved.getMediaId(), saved.getMimeType(),
             saved.isViewOnce(), saved.getViewedAt(),
-            saved.getSentAt()
+            saved.getSentAt(),
+            saved.getReplyToId()
         );
         String payload = objectMapper.writeValueAsString(out);
 

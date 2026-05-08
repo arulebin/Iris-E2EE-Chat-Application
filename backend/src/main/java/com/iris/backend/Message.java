@@ -41,11 +41,14 @@ public class Message {
 
     private Instant viewedAt;
 
+    private Long replyToId;
+
     protected Message(){ }
 
     public Message(String sender, String recipient, String content,
                String encryptedKeyForSender, String encryptedKeyForRecipient,
-               String mediaId, String mimeType, boolean viewOnce) {
+               String mediaId, String mimeType, boolean viewOnce,
+               Long replyToId) {
         this.sender = sender;
         this.recipient = recipient;
         this.content = content;
@@ -54,6 +57,7 @@ public class Message {
         this.mediaId = mediaId;
         this.mimeType = mimeType;
         this.viewOnce = viewOnce;
+        this.replyToId = replyToId;
     }
 
 
@@ -69,4 +73,5 @@ public class Message {
     public boolean isViewOnce() { return viewOnce; }
     public Instant getViewedAt() { return viewedAt; }
     public void setViewedAt(Instant viewedAt) { this.viewedAt = viewedAt; }
+    public Long getReplyToId() { return replyToId; }
 }

@@ -17,6 +17,11 @@ type Props = {
   onMarkSnapViewed: (key: string) => void;
   recipientPublicKeyReady: boolean;
 
+  // reply
+  replyTo: ChatMessage | null;
+  onStartReply: (msg: ChatMessage) => void;
+  onCancelReply: () => void;
+
   // call-related
   callState: CallState;
   localStream: MediaStream | null;
@@ -40,6 +45,9 @@ export function ConversationView(props: Props) {
     onSendMedia,
     onMarkSnapViewed,
     recipientPublicKeyReady,
+    replyTo,
+    onStartReply,
+    onCancelReply,
     callState,
     localStream,
     remoteStream,
@@ -70,6 +78,7 @@ export function ConversationView(props: Props) {
         me={me}
         token={token}
         onMarkSnapViewed={onMarkSnapViewed}
+        onStartReply={onStartReply}
       />
 
       <MessageInput
@@ -83,6 +92,8 @@ export function ConversationView(props: Props) {
             ? null
             : `${peer} hasn't uploaded a public key yet — ask them to log in.`
         }
+        replyTo={replyTo}
+        onCancelReply={onCancelReply}
       />
     </div>
   );

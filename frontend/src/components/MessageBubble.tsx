@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { CheckIcon, EyeOffIcon, TimerIcon } from "./icons";
+import { CheckIcon, EyeOffIcon, ReplyIcon, TimerIcon } from "./icons";
 import { fetchMediaObjectURL } from "../lib/media";
+
+export type ChatMessage = import("../types").ChatMessage;
 
 type Props = {
   content: string;
@@ -11,6 +13,9 @@ type Props = {
   viewedAt?: string | null;
   token?: string | null;
   onOpenSnap?: () => void;
+  replyTo?: ChatMessage | null;
+  onReply?: () => void;
+  timestamp?: string;
 };
 
 function MediaContent({
@@ -109,6 +114,45 @@ function SnapPlaceholder({
   );
 }
 
+function ReplyPreview({ replyTo, isOwnBubble }: { replyTo: ChatMessage; isOwnBubble: boolean }) {
+  const isMedia = !!replyTo.mediaId;
+  const isVideo = replyTo.mimeType?.startsWith("video/");
+  const preview = isMedia
+    ? replyTo.viewOnce
+      ? `Snap · ${isVideo ? "video" : "photo"}`
+      : isVideo
+      ? "Video"
+      : "Photo"
+    : replyTo.content || "";
+
+  // WhatsApp style reply box with a color-coded left border
+  const containerClass = isOwnBubble
+    ? "bg-black/20 border-blue-500 text-white"
+    : "bg-black/5 border-primary text-navy";
+
+  const nameColor = isOwnBubble ? "text-blue-500" : "text-primary";
+
+  return (
+    <div className={`text-xs rounded border-l-[4px] px-2 py-1 mb-1 max-w-full ${containerClass}`}>
+      <p className={`font-semibold truncate ${nameColor}`}>{replyTo.from}</p>
+      <p className="truncate opacity-80">{preview || "…"}</p>
+    </div>
+  );
+}
+
+function ReplyButton({ onReply }: { onReply: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onReply}
+      aria-label="Reply"
+      className="opacity-40 hover:opacity-100 text-muted hover:text-navy p-1 transition shrink-0 self-center"
+    >
+      <ReplyIcon className="w-4 h-4" />
+    </button>
+  );
+}
+
 export function MessageBubble({
   content,
   isOwn,
@@ -118,63 +162,103 @@ export function MessageBubble({
   viewedAt,
   token,
   onOpenSnap,
+  replyTo,
+  onReply,
+  timestamp,
 }: Props) {
   const hasMedia = !!mediaId && !!token;
 
   // Snap (view-once) media — render a placeholder that opens the fullscreen viewer.
-  // Sender never opens; recipient opens once. After view, both sides show "viewed".
   if (hasMedia && viewOnce) {
     const viewed = !!viewedAt;
     const canOpen = !isOwn && !viewed;
-    const align = isOwn ? "self-end" : "self-start";
+    const align = isOwn ? "self-end flex-row" : "self-start flex-row-reverse";
     return (
-      <div className={`flex flex-col gap-1 ${align} max-w-[80%]`}>
-        <SnapPlaceholder
-          isOwn={isOwn}
-          viewed={viewed}
-          canOpen={canOpen}
-          mimeType={mimeType}
-          onOpen={onOpenSnap}
-        />
+      <div className={`flex items-stretch gap-1 ${align} max-w-[85%]`}>
+        {onReply && <ReplyButton onReply={onReply} />}
+        <div className="flex flex-col gap-1 max-w-full">
+          {replyTo && <ReplyPreview replyTo={replyTo} isOwnBubble={isOwn} />}
+          <div className="relative">
+            <SnapPlaceholder
+              isOwn={isOwn}
+              viewed={viewed}
+              canOpen={canOpen}
+              mimeType={mimeType}
+              onOpen={onOpenSnap}
+            />
+            {timestamp && (
+              <span className={`text-[10px] mt-1 absolute ${isOwn ? "right-2 text-white/70" : "left-2 text-navy/70"} bottom-1`}>
+                {timestamp}
+              </span>
+            )}
+          </div>
+        </div>
       </div>
     );
   }
 
   // Regular media — inline image or video bubble, optional caption below.
   if (hasMedia) {
-    const align = isOwn ? "self-end" : "self-start";
+    const align = isOwn ? "self-end flex-row" : "self-start flex-row-reverse";
     return (
-      <div className={`flex flex-col gap-1 ${align} max-w-[80%]`}>
-        <MediaContent mediaId={mediaId!} mimeType={mimeType} token={token!} />
-        {content && (
-          <div
-            className={`px-3 py-2 rounded-2xl text-[14px] leading-snug shadow-sm wrap-break-word ${
-              isOwn
-                ? "bg-navy text-white rounded-br-md"
-                : "bg-card text-navy rounded-bl-md"
-            }`}
-          >
-            {content}
+      <div className={`flex items-stretch gap-1 ${align} max-w-[85%]`}>
+        {onReply && <ReplyButton onReply={onReply} />}
+        <div className="flex flex-col gap-1 max-w-full">
+          {replyTo && <ReplyPreview replyTo={replyTo} isOwnBubble={isOwn} />}
+          <div onClick={() => onOpenSnap && onOpenSnap()} className="cursor-pointer">
+            <MediaContent mediaId={mediaId!} mimeType={mimeType} token={token!} />
           </div>
-        )}
+          {content && (
+            <div
+              className={`px-3 py-2 rounded-2xl text-[14px] leading-snug shadow-sm wrap-break-word relative pb-5 ${
+                isOwn
+                  ? "bg-navy text-white rounded-br-md"
+                  : "bg-card text-navy rounded-bl-md"
+              }`}
+            >
+              {content}
+              {timestamp && (
+                <span className={`text-[10px] absolute bottom-1 right-3 ${isOwn ? "text-white/60" : "text-navy/50"}`}>
+                  {timestamp}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     );
   }
 
   if (isOwn) {
     return (
-      <div className="flex items-end gap-1.5 self-end max-w-[80%]">
-        <CheckIcon className="w-4 h-4 text-primary shrink-0 mb-2" />
-        <div className="bg-navy text-white px-4 py-2.5 rounded-2xl rounded-br-md text-[15px] leading-snug shadow-sm wrap-break-word">
-          {content}
+      <div className="flex items-stretch gap-1 self-end max-w-[85%]">
+        {onReply && <ReplyButton onReply={onReply} />}
+        <div className="flex flex-col bg-navy text-white p-1.5 rounded-2xl rounded-br-md shadow-sm min-w-[80px] relative">
+          {replyTo && <ReplyPreview replyTo={replyTo} isOwnBubble />}
+          <div className="text-[15px] leading-snug wrap-break-word px-2 pb-3">
+            {content}
+            <div className="text-[10px] text-white/60 absolute bottom-1.5 right-3 flex items-center gap-1">
+              {timestamp}
+              <CheckIcon className="w-3 h-3 text-primary" />
+            </div>
+          </div>
         </div>
       </div>
     );
   }
   return (
-    <div className="self-start max-w-[80%]">
-      <div className="bg-card text-navy px-4 py-2.5 rounded-2xl rounded-bl-md text-[15px] leading-snug shadow-sm wrap-break-word">
-        {content}
+    <div className="flex items-stretch gap-1 self-start max-w-[85%] flex-row-reverse">
+      {onReply && <ReplyButton onReply={onReply} />}
+      <div className="flex flex-col bg-card text-navy p-1.5 rounded-2xl rounded-bl-md shadow-sm min-w-[80px] relative">
+        {replyTo && <ReplyPreview replyTo={replyTo} isOwnBubble={false}/>}
+        <div className="text-[15px] leading-snug wrap-break-word px-2 pb-4">
+          {content}
+        </div>
+        {timestamp && (
+          <div className="text-[10px] text-navy/50 absolute bottom-1.5 right-3">
+            {timestamp}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,7 @@
 // Shared types used across the app + extracted components
 
 export type ChatMessage = {
+  id?: number | null;
   from: string;
   to: string;
   content: string;
@@ -11,6 +12,7 @@ export type ChatMessage = {
   viewOnce?: boolean;
   viewedAt?: string | null;
   sentAt: string;
+  replyToId?: number | null;
 };
 
 export type CallState =

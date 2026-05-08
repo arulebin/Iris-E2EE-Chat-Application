@@ -23,6 +23,7 @@ public class MessageController {
 
         return messageRepository.findConversation(me, with).stream()
             .map(m -> new OutgoingMessage(
+                m.getId(),
                 m.getSender(),
                 m.getRecipient(),
                 m.getContent(),
@@ -32,7 +33,8 @@ public class MessageController {
                 m.getMimeType(),
                 m.isViewOnce(),
                 m.getViewedAt(),
-                m.getSentAt()
+                m.getSentAt(),
+                m.getReplyToId()
             ))
             .toList();
     }

@@ -43,6 +43,7 @@ function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [recipient, setRecipient] = useState("");
   const [input, setInput] = useState("");
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // ── crypto state ────────────────────────────────────────────────
@@ -262,6 +263,7 @@ function App() {
     setRecipient(user);
     setRecipientPublicKey(null);
     setMessages([]);
+    setReplyTo(null);
     setView("chat");
     if (!token) return;
     try {
@@ -286,9 +288,11 @@ function App() {
           content: enc.ciphertext,
           encryptedKeyForSender: enc.encryptedKeyForSender,
           encryptedKeyForRecipient: enc.encryptedKeyForRecipient,
+          replyToId: replyTo?.id ?? null,
         }),
       );
       setInput("");
+      setReplyTo(null);
     } catch (err) {
       console.error("Encryption failed", err);
     }
@@ -313,8 +317,10 @@ function App() {
         mediaId,
         mimeType,
         viewOnce,
+        replyToId: replyTo?.id ?? null,
       }),
     );
+    setReplyTo(null);
   }
 
   // After the recipient consumes a snap, flip its viewedAt locally so the
@@ -552,6 +558,9 @@ function App() {
           onSendMedia={sendMedia}
           onMarkSnapViewed={markSnapViewed}
           recipientPublicKeyReady={!!recipientPublicKey}
+          replyTo={replyTo}
+          onStartReply={setReplyTo}
+          onCancelReply={() => setReplyTo(null)}
           callState={callState}
           localStream={localStream}
           remoteStream={remoteStream}
@@ -560,6 +569,7 @@ function App() {
           onBack={() => {
             setView("list");
             setRecipient("");
+            setReplyTo(null);
           }}
         />
       )}

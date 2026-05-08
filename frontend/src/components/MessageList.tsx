@@ -8,6 +8,7 @@ type Props = {
   me: string | null;
   token: string | null;
   onMarkSnapViewed: (key: string) => void; // key = sender|sentAt|mediaId — uniquely identifies a message
+  onStartReply: (msg: ChatMessage) => void;
 };
 
 function formatTime(iso: string): string {
@@ -34,13 +35,17 @@ function formatDate(iso: string): string {
   }
 }
 
-export function MessageList({ messages, me, token, onMarkSnapViewed }: Props) {
+export function MessageList({ messages, me, token, onMarkSnapViewed, onStartReply }: Props) {
+  const messagesById = new Map<number, ChatMessage>();
+  for (const m of messages) {
+    if (m.id != null) messagesById.set(m.id, m);
+  }
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [openSnap, setOpenSnap] = useState<ChatMessage | null>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+    bottomRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [messages]);
 
   if (messages.length === 0) {
     return (
@@ -80,7 +85,7 @@ export function MessageList({ messages, me, token, onMarkSnapViewed }: Props) {
 
         {clusters.map((cluster, ci) => {
           const isOwn = cluster.from === me;
-          const last = cluster.items[cluster.items.length - 1];
+          // const last = cluster.items[cluster.items.length - 1];
           return (
             <div key={ci} className="flex flex-col gap-1.5">
               {cluster.items.map((msg, mi) => (
@@ -94,13 +99,11 @@ export function MessageList({ messages, me, token, onMarkSnapViewed }: Props) {
                   viewedAt={msg.viewedAt}
                   token={token}
                   onOpenSnap={() => setOpenSnap(msg)}
+                  replyTo={msg.replyToId != null ? messagesById.get(msg.replyToId) ?? null : null}
+                  onReply={() => onStartReply(msg)}
+                  timestamp={formatTime(msg.sentAt)}
                 />
               ))}
-              <span
-                className={`text-xs text-muted ${isOwn ? "self-end" : "self-start"} px-1`}
-              >
-                {formatTime(last.sentAt)}
-              </span>
             </div>
           );
         })}
@@ -114,7 +117,9 @@ export function MessageList({ messages, me, token, onMarkSnapViewed }: Props) {
           mimeType={openSnap.mimeType}
           token={token}
           onClose={() => setOpenSnap(null)}
-          onConsumed={() => onMarkSnapViewed(snapKey(openSnap))}
+          onConsumed={() => {
+            if (openSnap.viewOnce) onMarkSnapViewed(snapKey(openSnap));
+          }}
         />
       )}
     </>

@@ -7,7 +7,8 @@ public record IncomingMessage(
         String encryptedKeyForRecipient,
         String mediaId,
         String mimeType,
-        Boolean viewOnce
+        Boolean viewOnce,
+        Long replyToId
 ) {
     /** Defensive accessor — viewOnce may be omitted from older clients. */
     public boolean viewOnceFlag() {
