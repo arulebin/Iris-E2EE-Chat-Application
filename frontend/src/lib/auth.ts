@@ -20,5 +20,5 @@ export function getTokenExpiryMs(token: string | null): number | null {
 
 export function isTokenExpired(token: string | null): boolean {
   const expiryMs = getTokenExpiryMs(token);
-  return expiryMs === null || expiryMs <= Date.now();
+  return expiryMs !== null && expiryMs <= Date.now();
 }

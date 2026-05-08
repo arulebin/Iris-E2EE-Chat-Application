@@ -26,11 +26,9 @@ public class JwtService {
 
     public String generateToken(String username) {
         Date now = new Date();
-        Date expiry = new Date(now.getTime() + expirationMs);
         return Jwts.builder()
                 .subject(username)
                 .issuedAt(now)
-                .expiration(expiry)
                 .signWith(signingKey)
                 .compact();
     }

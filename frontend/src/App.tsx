@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { get, set } from "idb-keyval";
 import {
   ensureKeyPair,
   fetchPublicKey,
@@ -149,16 +150,18 @@ function App() {
     nav.brave?.isBrave?.().then(setIsBrave).catch(() => {});
   }, []);
 
-  // Auto-logout when the JWT hits its exp timestamp
+  // We no longer auto-logout based on exp timestamp.
+  // The token is persistent until manual logout.
   useEffect(() => {
     if (!token) return;
     const expiryMs = getTokenExpiryMs(token);
     if (expiryMs === null) return;
-    const id = setTimeout(() => {
+    const timeUntilExpiry = expiryMs - Date.now();
+    if (timeUntilExpiry <= 0) {
+      // Clean up if somehow an old expired token slipped through
       localStorage.removeItem("token");
       setToken(null);
-    }, Math.max(0, expiryMs - Date.now()));
-    return () => clearTimeout(id);
+    }
   }, [token]);
 
   // password is read from closure; intentionally not in deps so the effect
@@ -176,13 +179,25 @@ function App() {
 
   useEffect(() => {
     if (!token) return;
+
+    if (me) {
+      get<string[]>(`users_list_${me}`).then((cached) => {
+        if (cached && cached.length > 0) {
+          setUsers((prev) => prev.length === 0 ? cached : prev);
+        }
+      }).catch(console.error);
+    }
+
     fetch(`${apiBase}/api/users`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : []))
-      .then((list: string[]) => setUsers(list))
-      .catch(() => setUsers([]));
-  }, [token]);
+      .then((list: string[]) => {
+        setUsers(list);
+        if (me) set(`users_list_${me}`, list).catch(console.error);
+      })
+      .catch(() => { /* offline silently handled */ });
+  }, [token, me]);
 
   // ── decrypt one incoming/historical message ─────────────────────
   const decryptIncoming = useCallback(
@@ -204,7 +219,15 @@ function App() {
 
   // Fetch + decrypt conversation history when recipient changes
   useEffect(() => {
-    if (!token || !recipient.trim() || !privateKey) return;
+    if (!token || !recipient.trim() || !privateKey || !me) return;
+
+    const cacheKey = `chat_history_${me}_${recipient}`;
+    get<ChatMessage[]>(cacheKey).then((cached) => {
+      if (cached && cached.length > 0) {
+        setMessages((prev) => prev.length === 0 ? cached : prev);
+      }
+    }).catch(console.error);
+
     fetch(`${apiBase}/api/messages?with=${encodeURIComponent(recipient)}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -212,9 +235,10 @@ function App() {
       .then(async (history: ChatMessage[]) => {
         const decrypted = await Promise.all(history.map(decryptIncoming));
         setMessages(decrypted);
+        set(cacheKey, decrypted).catch(console.error);
       })
-      .catch(() => setMessages([]));
-  }, [token, recipient, privateKey, decryptIncoming]);
+      .catch(() => { /* serve via offline cache silently */ });
+  }, [token, recipient, privateKey, decryptIncoming, me]);
 
   // Sync refs read by ws.onmessage
   useEffect(() => {
@@ -249,7 +273,13 @@ function App() {
           (msg.from === currentRecipient && msg.to === currentMe);
         if (isCurrentChat && decryptIncomingRef.current) {
           const decrypted = await decryptIncomingRef.current(msg);
-          setMessages((prev) => [...prev, decrypted]);
+          setMessages((prev) => {
+            const next = [...prev, decrypted];
+            if (currentMe && currentRecipient) {
+              set(`chat_history_${currentMe}_${currentRecipient}`, next).catch(console.error);
+            }
+            return next;
+          });
         }
       } catch {
         // ignore non-JSON
@@ -326,13 +356,17 @@ function App() {
   // After the recipient consumes a snap, flip its viewedAt locally so the
   // bubble switches to "Snap viewed" without waiting for a refetch.
   function markSnapViewed(key: string) {
-    setMessages((prev) =>
-      prev.map((m) =>
+    setMessages((prev) => {
+      const next = prev.map((m) =>
         `${m.from}|${m.sentAt}|${m.mediaId ?? ""}` === key
           ? { ...m, viewedAt: m.viewedAt ?? new Date().toISOString() }
           : m,
-      ),
-    );
+      );
+      if (me && recipient) {
+        set(`chat_history_${me}_${recipient}`, next).catch(console.error);
+      }
+      return next;
+    });
   }
 
   // ── camera / call lifecycle ─────────────────────────────────────
