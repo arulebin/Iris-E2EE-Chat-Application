@@ -21,6 +21,7 @@ import { ConversationView } from "./components/ConversationView";
 import { SettingsView } from "./components/SettingsView";
 import { IncomingCallModal } from "./components/IncomingCallModal";
 import { CallNoticeBanner } from "./components/CallNoticeBanner";
+import { VideoCallScreen } from "./components/VideoCallScreen";
 
 type View = "list" | "chat" | "settings";
 
@@ -66,6 +67,8 @@ function App() {
   const handleSignalRef = useRef<((s: CallSignal) => Promise<void>) | null>(null);
   const [callState, setCallState] = useState<CallState>({ kind: "idle" });
   const [callNotice, setCallNotice] = useState<string | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isCameraOff, setIsCameraOff] = useState(false);
 
   // ── view routing ────────────────────────────────────────────────
   const [view, setView] = useState<View>("list");
@@ -393,6 +396,54 @@ function App() {
     setRemoteStream(null);
     stopCamera();
     setCallState({ kind: "idle" });
+    setIsMuted(false);
+    setIsCameraOff(false);
+  }
+
+  function toggleMute() {
+    if (!localStream) return;
+    const audioTracks = localStream.getAudioTracks();
+    const next = !isMuted;
+    audioTracks.forEach((t) => (t.enabled = !next));
+    setIsMuted(next);
+  }
+
+  function toggleCamera() {
+    if (!localStream) return;
+    const videoTracks = localStream.getVideoTracks();
+    const next = !isCameraOff;
+    videoTracks.forEach((t) => (t.enabled = !next));
+    setIsCameraOff(next);
+  }
+
+  async function flipCamera() {
+    if (!localStream) return;
+    const currentTrack = localStream.getVideoTracks()[0];
+    if (!currentTrack) return;
+    // Determine current facing mode and request the opposite
+    const settings = currentTrack.getSettings();
+    const newFacing = settings.facingMode === "environment" ? "user" : "environment";
+    try {
+      const newStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: newFacing } },
+        audio: false,
+      });
+      const newTrack = newStream.getVideoTracks()[0];
+      // Replace track in the local stream
+      localStream.removeTrack(currentTrack);
+      localStream.addTrack(newTrack);
+      currentTrack.stop();
+      // Replace track in the peer connection sender so remote side sees the new camera
+      const pc = pcRef.current;
+      if (pc) {
+        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
+        if (sender) await sender.replaceTrack(newTrack);
+      }
+      // Force re-render by updating the stream reference
+      setLocalStream(new MediaStream([...localStream.getTracks()]));
+    } catch (err) {
+      console.error("Flip camera failed (device may only have one camera)", err);
+    }
   }
 
   async function startCall() {
@@ -569,6 +620,21 @@ function App() {
           from={callState.from}
           onAccept={acceptCall}
           onReject={rejectCall}
+        />
+      )}
+
+      {(callState.kind === "outgoing" || callState.kind === "active") && (
+        <VideoCallScreen
+          peer={callState.kind === "outgoing" ? callState.to : callState.peer}
+          callKind={callState.kind}
+          localStream={localStream}
+          remoteStream={remoteStream}
+          onHangUp={hangUp}
+          onToggleMute={toggleMute}
+          onToggleCamera={toggleCamera}
+          onFlipCamera={flipCamera}
+          isMuted={isMuted}
+          isCameraOff={isCameraOff}
         />
       )}
 
