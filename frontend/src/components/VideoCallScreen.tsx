@@ -89,25 +89,25 @@ function useCallTimer(active: boolean) {
 // ── Draggable PiP hook ─────────────────────────────────────────────────────
 
 function useDraggable(initialCorner: "top-right" | "bottom-right" = "top-right") {
-  const ref = useRef<HTMLDivElement | null>(null);
+  const elRef = useRef<HTMLElement | null>(null);
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const [initialized, setInitialized] = useState(false);
   const dragging = useRef(false);
   const offset = useRef({ x: 0, y: 0 });
 
-  // Set initial position based on viewport
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const padding = 16;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const rect = el.getBoundingClientRect();
-    const x = vw - rect.width - padding;
-    const y = initialCorner === "top-right" ? padding + 48 : vh - rect.height - padding - 120;
-    setPos({ x, y });
-    setInitialized(true);
-  }, [initialCorner]);
+  const ref = useCallback((node: HTMLElement | null) => {
+    elRef.current = node;
+    if (node && !initialized) {
+      const padding = 16;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const rect = node.getBoundingClientRect();
+      const x = vw - rect.width - padding;
+      const y = initialCorner === "top-right" ? padding + 48 : vh - rect.height - padding - 120;
+      setPos({ x, y });
+      setInitialized(true);
+    }
+  }, [initialCorner, initialized]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     dragging.current = true;
@@ -116,8 +116,8 @@ function useDraggable(initialCorner: "top-right" | "bottom-right" = "top-right")
   }, [pos]);
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragging.current || !ref.current) return;
-    const el = ref.current;
+    if (!dragging.current || !elRef.current) return;
+    const el = elRef.current;
     const maxX = window.innerWidth - el.offsetWidth;
     const maxY = window.innerHeight - el.offsetHeight;
     const x = Math.max(0, Math.min(maxX, e.clientX - offset.current.x));
@@ -173,8 +173,6 @@ export function VideoCallScreen({
   isMuted,
   isCameraOff,
 }: Props) {
-  const remoteRef = useRef<HTMLVideoElement | null>(null);
-  const localRef = useRef<HTMLVideoElement | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [speakerOn, setSpeakerOn] = useState(true);
@@ -183,14 +181,21 @@ export function VideoCallScreen({
 
   const isConnected = callKind === "active" && remoteStream;
 
-  // Attach streams to <video> elements
-  useEffect(() => {
-    if (remoteRef.current) remoteRef.current.srcObject = remoteStream;
-  }, [remoteStream]);
+  // Safely attach streams using callback refs so they work across mounts/unmounts
+  const remoteRef = useCallback(
+    (node: HTMLVideoElement | null) => {
+      if (node && remoteStream) node.srcObject = remoteStream;
+      if (node) node.muted = !speakerOn;
+    },
+    [remoteStream, speakerOn]
+  );
 
-  useEffect(() => {
-    if (localRef.current) localRef.current.srcObject = localStream;
-  }, [localStream]);
+  const localRef = useCallback(
+    (node: HTMLVideoElement | null) => {
+      if (node && localStream) node.srcObject = localStream;
+    },
+    [localStream]
+  );
 
   // Auto-hide controls after 4s of inactivity during active call
   useEffect(() => {
@@ -213,10 +218,7 @@ export function VideoCallScreen({
     };
   }, [callKind]);
 
-  // Toggle speaker (remote video muted state)
-  useEffect(() => {
-    if (remoteRef.current) remoteRef.current.muted = !speakerOn;
-  }, [speakerOn]);
+  // Toggle speaker handled in remoteRef callback
 
   const initial = (peer[0] ?? "?").toUpperCase();
 
