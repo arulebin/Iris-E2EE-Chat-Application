@@ -1,13 +1,14 @@
 import type { CallState } from "../types";
 import { Avatar } from "./Avatar";
-import { BackIcon, MoreIcon, PhoneIcon } from "./icons";
+import { BackIcon, MoreIcon, PhoneIcon, VideoIcon } from "./icons";
 
 type Props = {
   peer: string;
   online?: boolean;
   callState: CallState;
   onBack: () => void;
-  onStartCall: () => void;
+  onStartVoiceCall: () => void;
+  onStartVideoCall: () => void;
   onHangUp: () => void;
 };
 
@@ -16,7 +17,8 @@ export function ConversationHeader({
   online,
   callState,
   onBack,
-  onStartCall,
+  onStartVoiceCall,
+  onStartVideoCall,
   onHangUp,
 }: Props) {
   const inCall = callState.kind === "outgoing" || callState.kind === "active";
@@ -55,13 +57,22 @@ export function ConversationHeader({
           End
         </button>
       ) : (
-        <button
-          onClick={onStartCall}
-          className="text-navy hover:opacity-70 p-2"
-          aria-label={`Call ${peer}`}
-        >
-          <PhoneIcon />
-        </button>
+        <div className="flex items-center">
+          <button
+            onClick={onStartVideoCall}
+            className="text-navy hover:opacity-70 p-2"
+            aria-label={`Video call ${peer}`}
+          >
+            <VideoIcon />
+          </button>
+          <button
+            onClick={onStartVoiceCall}
+            className="text-navy hover:opacity-70 p-2"
+            aria-label={`Voice call ${peer}`}
+          >
+            <PhoneIcon />
+          </button>
+        </div>
       )}
 
       <button

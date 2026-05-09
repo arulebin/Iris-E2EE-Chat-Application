@@ -35,7 +35,7 @@ const ICE_SERVERS: RTCConfiguration = {
 }
 
 export type CallSignal =
-  | { type: 'call-offer';  to: string; from?: string; payload: RTCSessionDescriptionInit }
+  | { type: 'call-offer';  to: string; from?: string; payload: RTCSessionDescriptionInit; mode?: 'audio' | 'video' }
   | { type: 'call-answer'; to: string; from?: string; payload: RTCSessionDescriptionInit }
   | { type: 'call-ice';    to: string; from?: string; payload: RTCIceCandidateInit }
   | { type: 'call-end';    to: string; from?: string }

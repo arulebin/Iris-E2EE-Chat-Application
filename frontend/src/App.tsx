@@ -8,7 +8,7 @@ import {
 } from "./crypto";
 import { enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
-import type { ChatMessage, CallState } from "./types";
+import type { ChatMessage, CallState, CallMode } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { uploadMedia } from "./lib/media";
 import { apiBase, wsURL } from "./lib/config";
@@ -384,6 +384,17 @@ function App() {
     }
   }
 
+  async function startMicrophone() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      setLocalStream(stream);
+      return stream;
+    } catch (err) {
+      console.error("Microphone permission denied or unavailable", err);
+      return null;
+    }
+  }
+
   function stopCamera() {
     localStream?.getTracks().forEach((t) => t.stop());
     setLocalStream(null);
@@ -420,7 +431,6 @@ function App() {
     if (!localStream) return;
     const currentTrack = localStream.getVideoTracks()[0];
     if (!currentTrack) return;
-    // Determine current facing mode and request the opposite
     const settings = currentTrack.getSettings();
     const newFacing = settings.facingMode === "environment" ? "user" : "environment";
     try {
@@ -429,31 +439,28 @@ function App() {
         audio: false,
       });
       const newTrack = newStream.getVideoTracks()[0];
-      // Replace track in the local stream
       localStream.removeTrack(currentTrack);
       localStream.addTrack(newTrack);
       currentTrack.stop();
-      // Replace track in the peer connection sender so remote side sees the new camera
       const pc = pcRef.current;
       if (pc) {
         const sender = pc.getSenders().find((s) => s.track?.kind === "video");
         if (sender) await sender.replaceTrack(newTrack);
       }
-      // Force re-render by updating the stream reference
       setLocalStream(new MediaStream([...localStream.getTracks()]));
     } catch (err) {
       console.error("Flip camera failed (device may only have one camera)", err);
     }
   }
 
-  async function startCall() {
+  async function startCall(mode: CallMode) {
     if (!recipient || !wsRef.current) return;
     if (callState.kind !== "idle") return;
-    setCallState({ kind: "outgoing", to: recipient });
+    setCallState({ kind: "outgoing", to: recipient, mode });
 
     let stream = localStream;
     if (!stream) {
-      stream = await startCamera();
+      stream = mode === "video" ? await startCamera() : await startMicrophone();
       if (!stream) {
         setCallState({ kind: "idle" });
         return;
@@ -466,17 +473,17 @@ function App() {
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    wsRef.current.send(JSON.stringify({ type: "call-offer", to: recipient, payload: offer }));
+    wsRef.current.send(JSON.stringify({ type: "call-offer", to: recipient, payload: offer, mode }));
   }
 
   async function acceptCall() {
     if (callState.kind !== "incoming") return;
     if (!wsRef.current) return;
-    const { from, offer } = callState;
+    const { from, offer, mode } = callState;
 
     let stream = localStream;
     if (!stream) {
-      stream = await startCamera();
+      stream = mode === "video" ? await startCamera() : await startMicrophone();
       if (!stream) {
         wsRef.current.send(JSON.stringify({ type: "call-end", to: from }));
         setCallState({ kind: "idle" });
@@ -497,7 +504,7 @@ function App() {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     wsRef.current.send(JSON.stringify({ type: "call-answer", to: from, payload: answer }));
-    setCallState({ kind: "active", peer: from });
+    setCallState({ kind: "active", peer: from, mode });
   }
 
   function rejectCall() {
@@ -524,7 +531,8 @@ function App() {
       if (signal.from && signal.from !== recipient) {
         selectRecipient(signal.from);
       }
-      setCallState({ kind: "incoming", from: signal.from!, offer: signal.payload });
+      const mode: CallMode = (signal.type === "call-offer" && signal.mode) ? signal.mode : "video";
+      setCallState({ kind: "incoming", from: signal.from!, offer: signal.payload, mode });
       return;
     }
     if (signal.type === "call-answer") {
@@ -536,7 +544,7 @@ function App() {
       }
       pendingIceRef.current = [];
       if (callState.kind === "outgoing") {
-        setCallState({ kind: "active", peer: callState.to });
+        setCallState({ kind: "active", peer: callState.to, mode: callState.mode });
       }
       return;
     }
@@ -618,6 +626,7 @@ function App() {
       {callState.kind === "incoming" && (
         <IncomingCallModal
           from={callState.from}
+          mode={callState.mode}
           onAccept={acceptCall}
           onReject={rejectCall}
         />
@@ -627,6 +636,7 @@ function App() {
         <VideoCallScreen
           peer={callState.kind === "outgoing" ? callState.to : callState.peer}
           callKind={callState.kind}
+          callMode={callState.mode}
           localStream={localStream}
           remoteStream={remoteStream}
           onHangUp={hangUp}
@@ -668,7 +678,8 @@ function App() {
           callState={callState}
           localStream={localStream}
           remoteStream={remoteStream}
-          onStartCall={startCall}
+          onStartVoiceCall={() => startCall("audio")}
+          onStartVideoCall={() => startCall("video")}
           onHangUp={hangUp}
           onBack={() => {
             setView("list");

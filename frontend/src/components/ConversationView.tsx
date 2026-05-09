@@ -26,7 +26,8 @@ type Props = {
   callState: CallState;
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
-  onStartCall: () => void;
+  onStartVoiceCall: () => void;
+  onStartVideoCall: () => void;
   onHangUp: () => void;
 
   onBack: () => void;
@@ -51,7 +52,8 @@ export function ConversationView(props: Props) {
     callState,
     localStream,
     remoteStream,
-    onStartCall,
+    onStartVoiceCall,
+    onStartVideoCall,
     onHangUp,
     onBack,
   } = props;
@@ -63,7 +65,8 @@ export function ConversationView(props: Props) {
         online={online}
         callState={callState}
         onBack={onBack}
-        onStartCall={onStartCall}
+        onStartVoiceCall={onStartVoiceCall}
+        onStartVideoCall={onStartVideoCall}
         onHangUp={onHangUp}
       />
 

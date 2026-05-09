@@ -149,6 +149,7 @@ function colorForName(name: string): string {
 type Props = {
   peer: string;
   callKind: "outgoing" | "active";
+  callMode: "audio" | "video";
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   onHangUp: () => void;
@@ -162,6 +163,7 @@ type Props = {
 export function VideoCallScreen({
   peer,
   callKind,
+  callMode,
   localStream,
   remoteStream,
   onHangUp,
@@ -224,7 +226,7 @@ export function VideoCallScreen({
       style={{ background: "#0b0f14" }}
     >
       {/* ── Remote video (full-screen background) ──────────────────── */}
-      {isConnected ? (
+      {isConnected && callMode === "video" ? (
         <video
           ref={remoteRef}
           autoPlay
@@ -309,7 +311,7 @@ export function VideoCallScreen({
       </div>
 
       {/* ── Local video PiP (draggable) ────────────────────────────── */}
-      {localStream && (
+      {localStream && callMode === "video" && (
         <div
           ref={pip.ref}
           onPointerDown={pip.onPointerDown}
@@ -379,26 +381,28 @@ export function VideoCallScreen({
             </span>
           </button>
 
-          {/* Camera */}
-          <button
-            onClick={onToggleCamera}
-            className="flex flex-col items-center gap-1.5"
-            aria-label={isCameraOff ? "Turn camera on" : "Turn camera off"}
-          >
-            <div
-              className="w-14 h-14 rounded-full flex items-center justify-center transition-colors duration-200"
-              style={{
-                background: isCameraOff ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.15)",
-                color: isCameraOff ? "#0b0f14" : "white",
-                backdropFilter: "blur(20px)",
-              }}
+          {/* Camera (Video only) */}
+          {callMode === "video" && (
+            <button
+              onClick={onToggleCamera}
+              className="flex flex-col items-center gap-1.5"
+              aria-label={isCameraOff ? "Turn camera on" : "Turn camera off"}
             >
-              <CamIcon off={isCameraOff} />
-            </div>
-            <span className="text-white/70 text-[10px] font-medium">
-              {isCameraOff ? "Camera on" : "Camera off"}
-            </span>
-          </button>
+              <div
+                className="w-14 h-14 rounded-full flex items-center justify-center transition-colors duration-200"
+                style={{
+                  background: isCameraOff ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.15)",
+                  color: isCameraOff ? "#0b0f14" : "white",
+                  backdropFilter: "blur(20px)",
+                }}
+              >
+                <CamIcon off={isCameraOff} />
+              </div>
+              <span className="text-white/70 text-[10px] font-medium">
+                {isCameraOff ? "Camera on" : "Camera off"}
+              </span>
+            </button>
+          )}
 
           {/* Speaker */}
           <button
@@ -421,24 +425,26 @@ export function VideoCallScreen({
             </span>
           </button>
 
-          {/* Flip Camera */}
-          <button
-            onClick={onFlipCamera}
-            className="flex flex-col items-center gap-1.5"
-            aria-label="Flip camera"
-          >
-            <div
-              className="w-14 h-14 rounded-full flex items-center justify-center"
-              style={{
-                background: "rgba(255,255,255,0.15)",
-                color: "white",
-                backdropFilter: "blur(20px)",
-              }}
+          {/* Flip Camera (Video only) */}
+          {callMode === "video" && (
+            <button
+              onClick={onFlipCamera}
+              className="flex flex-col items-center gap-1.5"
+              aria-label="Flip camera"
             >
-              <FlipCameraIcon />
-            </div>
-            <span className="text-white/70 text-[10px] font-medium">Flip</span>
-          </button>
+              <div
+                className="w-14 h-14 rounded-full flex items-center justify-center"
+                style={{
+                  background: "rgba(255,255,255,0.15)",
+                  color: "white",
+                  backdropFilter: "blur(20px)",
+                }}
+              >
+                <FlipCameraIcon />
+              </div>
+              <span className="text-white/70 text-[10px] font-medium">Flip</span>
+            </button>
+          )}
         </div>
 
         {/* Hang up */}

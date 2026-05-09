@@ -11,11 +11,12 @@ function colorForName(name: string): string {
 
 type Props = {
   from: string;
+  mode: "audio" | "video";
   onAccept: () => void;
   onReject: () => void;
 };
 
-export function IncomingCallModal({ from, onAccept, onReject }: Props) {
+export function IncomingCallModal({ from, mode, onAccept, onReject }: Props) {
   const initial = (from[0] ?? "?").toUpperCase();
 
   return (
@@ -63,7 +64,7 @@ export function IncomingCallModal({ from, onAccept, onReject }: Props) {
 
         <p className="text-white text-2xl font-semibold tracking-wide">{from}</p>
         <p className="text-white/50 text-sm mt-2 animate-pulse">
-          Incoming video call…
+          Incoming {mode === "video" ? "video" : "voice"} call…
         </p>
 
         {/* E2EE badge */}

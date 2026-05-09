@@ -15,8 +15,10 @@ export type ChatMessage = {
   replyToId?: number | null;
 };
 
+export type CallMode = 'audio' | 'video';
+
 export type CallState =
   | { kind: 'idle' }
-  | { kind: 'outgoing'; to: string }
-  | { kind: 'incoming'; from: string; offer: RTCSessionDescriptionInit }
-  | { kind: 'active'; peer: string };
+  | { kind: 'outgoing'; to: string; mode: CallMode }
+  | { kind: 'incoming'; from: string; offer: RTCSessionDescriptionInit; mode: CallMode }
+  | { kind: 'active'; peer: string; mode: CallMode };
