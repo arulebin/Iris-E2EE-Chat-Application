@@ -12,24 +12,19 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
     {
-      urls: 'turn:a.relay.metered.ca:80',
-      username: 'e8dd65b92af4d3283aaceab8',
-      credential: 'kMuv3T3wQHOVFdxS'
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
     },
     {
-      urls: 'turn:a.relay.metered.ca:80?transport=tcp',
-      username: 'e8dd65b92af4d3283aaceab8',
-      credential: 'kMuv3T3wQHOVFdxS'
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
     },
     {
-      urls: 'turn:a.relay.metered.ca:443',
-      username: 'e8dd65b92af4d3283aaceab8',
-      credential: 'kMuv3T3wQHOVFdxS'
-    },
-    {
-      urls: 'turns:a.relay.metered.ca:443?transport=tcp',
-      username: 'e8dd65b92af4d3283aaceab8',
-      credential: 'kMuv3T3wQHOVFdxS'
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
     }
   ],
 }
