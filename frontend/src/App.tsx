@@ -467,7 +467,7 @@ function App() {
       }
     }
 
-    const pc = createPeerConnection(wsRef.current, recipient, setRemoteStream);
+    const pc = await createPeerConnection(wsRef.current, recipient, token, setRemoteStream);
     pcRef.current = pc;
     stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
 
@@ -491,7 +491,7 @@ function App() {
       }
     }
 
-    const pc = createPeerConnection(wsRef.current, from, setRemoteStream);
+    const pc = await createPeerConnection(wsRef.current, from, token, setRemoteStream);
     pcRef.current = pc;
     stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
 
