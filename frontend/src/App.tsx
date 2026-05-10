@@ -377,7 +377,10 @@ function App() {
   // ── camera / call lifecycle ─────────────────────────────────────
   async function startCamera() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
+      });
       setLocalStream(stream);
       return stream;
     } catch (err) {
