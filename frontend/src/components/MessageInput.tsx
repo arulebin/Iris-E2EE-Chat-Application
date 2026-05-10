@@ -40,8 +40,8 @@ export function MessageInput({
       await onSendMedia(file, snapMode);
       // Wait for it slightly so order is preserved somewhat
       await new Promise((r) => setTimeout(r, 100));
-    } catch (err: any) {
-      setUploadError(err.message ?? "Upload failed");
+    } catch (err: unknown) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
       throw err; // throw to stop sequence
     } finally {
       setUploading(false);

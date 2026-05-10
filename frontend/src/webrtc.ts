@@ -8,7 +8,7 @@ export type CallSignal =
   | { type: 'call-ice';    to: string; from?: string; payload: RTCIceCandidateInit }
   | { type: 'call-end';    to: string; from?: string }
 
-async function getIceServers(token: string): Promise<RTCConfiguration> {
+async function getIceServers(token: string | null): Promise<RTCConfiguration> {
   try {
     const res = await fetch(`${apiBase}/api/turn/credentials`, {
       headers: { Authorization: `Bearer ${token}` }
@@ -33,7 +33,7 @@ async function getIceServers(token: string): Promise<RTCConfiguration> {
 export async function createPeerConnection(
   ws: WebSocket,
   remoteUser: string,
-  token: string,
+  token: string | null,
   onTrack: (stream: MediaStream) => void
 ): Promise<RTCPeerConnection> {
   const rtcConfig = await getIceServers(token);

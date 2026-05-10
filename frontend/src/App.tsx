@@ -114,8 +114,8 @@ function App() {
       }
       localStorage.setItem("token", token);
       setToken(token);
-    } catch (err: any) {
-      setError(err.message ?? "Something went wrong");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
     }
   }
 
@@ -138,8 +138,8 @@ function App() {
     try {
       await enableNotifications(token);
       setPushEnabled(true);
-    } catch (err: any) {
-      setPushError(err.message ?? "Failed to enable notifications");
+    } catch (err: unknown) {
+      setPushError(err instanceof Error ? err.message : "Failed to enable notifications");
     }
   }
 
@@ -162,8 +162,10 @@ function App() {
     const timeUntilExpiry = expiryMs - Date.now();
     if (timeUntilExpiry <= 0) {
       // Clean up if somehow an old expired token slipped through
-      localStorage.removeItem("token");
-      setToken(null);
+      setTimeout(() => {
+        localStorage.removeItem("token");
+        setToken(null);
+      }, 0);
     }
   }, [token]);
 
