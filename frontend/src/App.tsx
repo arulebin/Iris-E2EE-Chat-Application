@@ -8,7 +8,7 @@ import {
 } from "./crypto";
 import { enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
-import type { ChatMessage, CallState, CallMode } from "./types";
+import type { ChatMessage, CallState, CallMode, UserProfile } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { uploadMedia } from "./lib/media";
 import { apiBase, wsURL } from "./lib/config";
@@ -41,7 +41,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   // ── chat state ──────────────────────────────────────────────────
-  const [users, setUsers] = useState<string[]>([]);
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [meProfile, setMeProfile] = useState<UserProfile | undefined>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [recipient, setRecipient] = useState("");
   const [input, setInput] = useState("");
@@ -186,7 +187,7 @@ function App() {
     if (!token) return;
 
     if (me) {
-      get<string[]>(`users_list_${me}`).then((cached) => {
+      get<UserProfile[]>(`users_list_${me}`).then((cached) => {
         if (cached && cached.length > 0) {
           setUsers((prev) => prev.length === 0 ? cached : prev);
         }
@@ -197,11 +198,41 @@ function App() {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : []))
-      .then((list: string[]) => {
+      .then((list: UserProfile[]) => {
         setUsers(list);
         if (me) set(`users_list_${me}`, list).catch(console.error);
       })
       .catch(() => { /* offline silently handled */ });
+
+    fetch(`${apiBase}/api/users/${me}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    }).then(res => res.ok ? res.json() : undefined)
+      .then(profile => {
+        if (profile) setMeProfile(profile);
+      }).catch(console.error);
+
+    // check URL for ?add=username parameter
+    const params = new URLSearchParams(window.location.search);
+    const userToAdd = params.get("add");
+    if (userToAdd) {
+      fetch(`${apiBase}/api/users/${userToAdd}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(res => res.ok ? res.json() : null)
+        .then(profile => {
+          if (profile) {
+            setUsers(prev => {
+              if (!prev.find(u => u.username === profile.username)) {
+                return [profile, ...prev];
+              }
+              return prev;
+            });
+            selectRecipient(profile.username);
+          }
+          window.history.replaceState({}, document.title, "/");
+        })
+        .catch(console.error);
+    }
   }, [token, me]);
 
   // ── decrypt one incoming/historical message ─────────────────────
@@ -624,6 +655,40 @@ function App() {
     );
   }
 
+  const handleUpdateProfile = async (preferredName: string, file: File | null) => {
+    if (!token) return;
+    
+    let avatarUrl = meProfile?.avatarUrl;
+    
+    if (file) {
+      const formData = new FormData();
+      formData.append("file", file);
+      
+      const res = await fetch(`${apiBase}/api/media/profile`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
+      if (!res.ok) throw new Error("Failed to upload profile picture");
+      const data = await res.json();
+      avatarUrl = data.mediaId;
+    }
+
+    const res2 = await fetch(`${apiBase}/api/users/profile`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ preferredName, avatarUrl }),
+    });
+
+    if (!res2.ok) throw new Error("Failed to update profile");
+    
+    const updatedProfile = await res2.json();
+    setMeProfile(updatedProfile);
+  };
+
   return (
     <AppShell>
       {callNotice && <CallNoticeBanner message={callNotice} />}
@@ -656,18 +721,21 @@ function App() {
       {view === "settings" && (
         <SettingsView
           me={me}
+          meProfile={meProfile}
           pushEnabled={pushEnabled}
           pushError={pushError}
           isBrave={isBrave}
           onBack={() => setView("list")}
           onEnableNotifications={handleEnableNotifications}
           onLogout={handleLogout}
+          onUpdateProfile={handleUpdateProfile}
         />
       )}
 
       {view === "chat" && recipient && (
         <ConversationView
           peer={recipient}
+          peerProfile={users.find(u => u.username === recipient)}
           me={me}
           token={token}
           messages={messages}

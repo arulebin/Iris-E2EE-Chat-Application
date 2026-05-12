@@ -1,5 +1,6 @@
 type Props = {
   name: string;
+  avatarUrl?: string;
   online?: boolean;
   size?: "sm" | "md" | "lg";
 };
@@ -27,14 +28,18 @@ function colorForName(name: string): string {
   return palette[Math.abs(hash) % palette.length];
 }
 
-export function Avatar({ name, online = false, size = "md" }: Props) {
+export function Avatar({ name, avatarUrl, online = false, size = "md" }: Props) {
   const initial = (name[0] ?? "?").toUpperCase();
   return (
-    <div className="relative inline-block">
+    <div className="relative inline-block shrink-0">
       <div
-        className={`${SIZE_CLASSES[size]} ${colorForName(name)} rounded-full flex items-center justify-center text-white font-bold`}
+        className={`${SIZE_CLASSES[size]} ${avatarUrl ? 'bg-transparent' : colorForName(name)} rounded-full flex items-center justify-center text-white font-bold overflow-hidden`}
       >
-        {initial}
+        {avatarUrl ? (
+          <img src={avatarUrl.startsWith('http') ? avatarUrl : `/api/media/profile/${avatarUrl}`} alt={name} className="w-full h-full object-cover" />
+        ) : (
+          initial
+        )}
       </div>
       {online && (
         <span

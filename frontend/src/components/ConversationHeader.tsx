@@ -1,9 +1,10 @@
-import type { CallState } from "../types";
+import type { CallState, UserProfile } from "../types";
 import { Avatar } from "./Avatar";
 import { BackIcon, MoreIcon, PhoneIcon, VideoIcon } from "./icons";
 
 type Props = {
   peer: string;
+  peerProfile?: UserProfile;
   online?: boolean;
   callState: CallState;
   onBack: () => void;
@@ -14,6 +15,7 @@ type Props = {
 
 export function ConversationHeader({
   peer,
+  peerProfile,
   online,
   callState,
   onBack,
@@ -41,10 +43,10 @@ export function ConversationHeader({
         <BackIcon />
       </button>
 
-      <Avatar name={peer} size="md" online={online} />
+      <Avatar name={peerProfile?.preferredName || peer} avatarUrl={peerProfile?.avatarUrl} size="md" online={online} />
 
       <div className="flex-1 min-w-0">
-        <p className="font-bold text-navy truncate">{peer}</p>
+        <p className="font-bold text-navy truncate">{peerProfile?.preferredName || peer}</p>
         {subtitle && <p className="text-xs text-muted">{subtitle}</p>}
       </div>
 

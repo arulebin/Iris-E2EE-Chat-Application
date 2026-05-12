@@ -1,4 +1,5 @@
 import { Avatar } from "./Avatar";
+import type { UserProfile } from "../types";
 import {
   ChatBubbleIcon,
   NewChatIcon,
@@ -8,7 +9,7 @@ import {
 
 type Props = {
   me: string | null;
-  users: string[];
+  users: UserProfile[];
   recipient: string;
   onSelectUser: (username: string) => void;
   onOpenSettings: () => void;
@@ -89,18 +90,18 @@ export function ChatListView({
         ) : (
           <ul className="flex flex-col gap-1 py-2">
             {users.map((u) => (
-              <li key={u}>
+              <li key={u.username}>
                 <button
-                  onClick={() => onSelectUser(u)}
+                  onClick={() => onSelectUser(u.username)}
                   className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-2xl transition ${
-                    recipient === u
+                    recipient === u.username
                       ? "bg-card shadow-sm"
                       : "hover:bg-card/60"
                   }`}
                 >
-                  <Avatar name={u} size="md" />
+                  <Avatar name={u.preferredName || u.username} avatarUrl={u.avatarUrl} size="md" />
                   <div className="flex-1 min-w-0">
-                    <p className="font-bold text-navy truncate">{u}</p>
+                    <p className="font-bold text-navy truncate">{u.preferredName || u.username}</p>
                     <p className="text-xs text-muted truncate">Tap to open chat</p>
                   </div>
                 </button>

@@ -1,5 +1,11 @@
 // Shared types used across the app + extracted components
 
+export type UserProfile = {
+  username: string;
+  preferredName?: string;
+  avatarUrl?: string;
+};
+
 export type ChatMessage = {
   id?: number | null;
   from: string;

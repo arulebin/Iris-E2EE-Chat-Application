@@ -1,4 +1,4 @@
-import type { CallState, ChatMessage } from "../types";
+import type { CallState, ChatMessage, UserProfile } from "../types";
 import { ConversationHeader } from "./ConversationHeader";
 import { MessageList } from "./MessageList";
 import { MessageInput } from "./MessageInput";
@@ -6,6 +6,7 @@ import { VideoGrid } from "./VideoGrid";
 
 type Props = {
   peer: string;
+  peerProfile?: UserProfile;
   online?: boolean;
   me: string | null;
   token: string | null;
@@ -36,6 +37,7 @@ type Props = {
 export function ConversationView(props: Props) {
   const {
     peer,
+    peerProfile,
     online,
     me,
     token,
@@ -62,6 +64,7 @@ export function ConversationView(props: Props) {
     <div className="flex flex-col h-full bg-bg">
       <ConversationHeader
         peer={peer}
+        peerProfile={peerProfile}
         online={online}
         callState={callState}
         onBack={onBack}
