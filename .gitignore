@@ -15,3 +15,12 @@ frontend/node_modules/
 .idea/
 *.iml
 .vscode/
+
+# Untracked/Unwanted Root files
+front-end-logs.txt
+node_modules/
+package-lock.json
+package.json
+PROGRESS.md
+SUMMARY.md
+.claude/

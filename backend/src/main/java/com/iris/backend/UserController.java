@@ -4,8 +4,13 @@ import java.util.List;
 
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api")
@@ -18,11 +23,29 @@ public class UserController {
     }
 
     @GetMapping("/users")
-    public List<String> getUsers(Authentication auth) {
+    public List<UserProfileDto> getUsers(Authentication auth) {
         String me = auth.getName();
-        return userRepository.findAll().stream()
-        .map(User::getUsername)
-        .filter(name -> !name.equals(me))
-        .toList();
-   }
+        return userRepository.findUsersWithHistory(me).stream()
+                .filter(u -> !u.getUsername().equals(me))
+                .map(UserProfileDto::from)
+                .toList();
+    }
+
+    @GetMapping("/users/{username}")
+    public UserProfileDto getUser(@PathVariable String username) {
+        return userRepository.findByUsername(username)
+                .map(UserProfileDto::from)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+    }
+
+    public record ProfileUpdateRequest(String preferredName, String avatarUrl) {}
+
+    @PutMapping("/users/profile")
+    public UserProfileDto updateProfile(@RequestBody ProfileUpdateRequest request, Authentication auth) {
+        User user = userRepository.findByUsername(auth.getName()).orElseThrow();
+        if (request.preferredName() != null) user.setPreferredName(request.preferredName());
+        if (request.avatarUrl() != null) user.setAvatarUrl(request.avatarUrl());
+        userRepository.save(user);
+        return UserProfileDto.from(user);
+    }
 }

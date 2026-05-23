@@ -30,6 +30,13 @@ public class User {
 
     @Column(columnDefinition = "TEXT")
     private String keySalt;
+
+    @Column
+    private String preferredName;
+
+    @Column(columnDefinition = "TEXT")
+    private String avatarUrl;
+
     // JPA requires a no-arg constructor (reflection)
     protected User() { }
 
@@ -49,4 +56,8 @@ public class User {
     public void setEncryptedPrivateKey(String encryptedPrivateKey) { this.encryptedPrivateKey = encryptedPrivateKey; }
     public String getKeySalt() { return keySalt; }
     public void setKeySalt(String keySalt) { this.keySalt = keySalt; }
+    public String getPreferredName() { return preferredName; }
+    public void setPreferredName(String preferredName) { this.preferredName = preferredName; }
+    public String getAvatarUrl() { return avatarUrl; }
+    public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
 }

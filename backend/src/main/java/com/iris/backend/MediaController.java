@@ -71,6 +71,31 @@ public class MediaController {
         return ResponseEntity.ok(new UploadResponse(mediaId, mimeType, plaintext.length));
     }
 
+    @PostMapping("/profile")
+    public ResponseEntity<UploadResponse> uploadProfilePic(
+            @RequestParam("file") MultipartFile file,
+            Authentication auth
+    ) throws IOException {
+        if (file.isEmpty()) return ResponseEntity.badRequest().build();
+        if (file.getSize() > 5L * 1024 * 1024) { 
+            return ResponseEntity.status(413).build();
+        }
+
+        String mimeType = file.getContentType();
+        if (mimeType == null || !mimeType.startsWith("image/")) {
+            return ResponseEntity.badRequest().build();
+        }
+
+        String ext = mimeType.replace("image/", "");
+        if (ext.equals("jpeg")) ext = "jpg";
+        
+        String mediaId = "prof_" + UUID.randomUUID().toString();
+        Path target = storageDir.resolve(mediaId + "." + ext);
+        file.transferTo(target);
+
+        return ResponseEntity.ok(new UploadResponse(mediaId + "." + ext, mimeType, file.getSize()));
+    }
+
     @GetMapping("/{mediaId}")
     public ResponseEntity<Resource> download(
             @PathVariable String mediaId,
@@ -122,6 +147,31 @@ public class MediaController {
                 .contentType(type)
                 .contentLength(plaintext.length)
                 .header(HttpHeaders.CACHE_CONTROL, cache)
+                .body(new ByteArrayResource(plaintext));
+    }
+
+    @GetMapping("/profile/{filename}")
+    public ResponseEntity<Resource> downloadProfilePic(
+            @PathVariable String filename
+    ) throws IOException {
+        Path file = storageDir.resolve(filename);
+        if (!Files.exists(file) || !filename.startsWith("prof_")) return ResponseEntity.notFound().build();
+
+        byte[] plaintext = Files.readAllBytes(file);
+        
+        String mimeType = "image/" + filename.substring(filename.lastIndexOf('.') + 1);
+        if (mimeType.equals("image/jpg")) mimeType = "image/jpeg";
+        MediaType type;
+        try {
+            type = MediaType.parseMediaType(mimeType);
+        } catch (Exception e) {
+            type = MediaType.APPLICATION_OCTET_STREAM;
+        }
+
+        return ResponseEntity.ok()
+                .contentType(type)
+                .contentLength(plaintext.length)
+                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
                 .body(new ByteArrayResource(plaintext));
     }
 
