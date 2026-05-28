@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { get, set } from "idb-keyval";
 import {
   ensureKeyPair,
@@ -8,7 +9,7 @@ import {
 } from "./crypto";
 import { enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
-import type { ChatMessage, CallState, CallMode, UserProfile } from "./types";
+import type { ChatMessage, CallState, CallMode, UserProfile, FriendRequest } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { uploadMedia } from "./lib/media";
 import { apiBase, wsURL } from "./lib/config";
@@ -22,8 +23,6 @@ import { SettingsView } from "./components/SettingsView";
 import { IncomingCallModal } from "./components/IncomingCallModal";
 import { CallNoticeBanner } from "./components/CallNoticeBanner";
 import { VideoCallScreen } from "./components/VideoCallScreen";
-
-type View = "list" | "chat" | "settings";
 
 function App() {
   // ── auth state ──────────────────────────────────────────────────
@@ -44,7 +43,6 @@ function App() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [meProfile, setMeProfile] = useState<UserProfile | undefined>();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [recipient, setRecipient] = useState("");
   const [input, setInput] = useState("");
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -71,9 +69,20 @@ function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
 
-  // ── view routing ────────────────────────────────────────────────
-  const [view, setView] = useState<View>("list");
+  // ── friend requests ─────────────────────────────────────────────
+  const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
+
+  // ── routing (React Router) ───────────────────────────────────────
+  const navigate = useNavigate();
+  const location = useLocation();
+  const chatMatch = /^\/chat\/(.+)$/.exec(location.pathname);
+  const recipient = chatMatch ? decodeURIComponent(chatMatch[1]) : "";
+  const view = location.pathname === "/settings" ? "settings"
+             : chatMatch                          ? "chat"
+             :                                     "list";
+
   const [showSplash, setShowSplash] = useState(true);
+  const [callMinimized, setCallMinimized] = useState(false);
 
   // Refs read by the long-lived ws.onmessage handler. Synced by a deps-less effect
   // below so the WS effect's deps stay [token] (no reconnect on sidebar clicks).
@@ -125,11 +134,10 @@ function App() {
     setToken(null);
     setMessages([]);
     setUsers([]);
-    setRecipient("");
     setPrivateKey(null);
     setMyPublicKey(null);
     setRecipientPublicKey(null);
-    setView("list");
+    navigate("/");
     wsRef.current?.close();
   }
 
@@ -211,29 +219,41 @@ function App() {
         if (profile) setMeProfile(profile);
       }).catch(console.error);
 
-    // check URL for ?add=username parameter
+    // check URL for ?add=<shareId> parameter
     const params = new URLSearchParams(window.location.search);
-    const userToAdd = params.get("add");
-    if (userToAdd) {
-      fetch(`${apiBase}/api/users/${userToAdd}`, {
+    const shareIdToAdd = params.get("add");
+    if (shareIdToAdd) {
+      fetch(`${apiBase}/api/users/by-share/${shareIdToAdd}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then(res => res.ok ? res.json() : null)
         .then(profile => {
           if (profile) {
-            setUsers(prev => {
-              if (!prev.find(u => u.username === profile.username)) {
-                return [profile, ...prev];
-              }
-              return prev;
-            });
-            selectRecipient(profile.username);
+            setUsers(prev =>
+              prev.find(u => u.username === profile.username) ? prev : [profile, ...prev]
+            );
+            setRecipientPublicKey(null);
+            setMessages([]);
+            setReplyTo(null);
+            navigate(`/chat/${encodeURIComponent(profile.username)}`, { replace: true });
+            fetchPublicKey(profile.username, token!)
+              .then(key => setRecipientPublicKey(key))
+              .catch(console.error);
+          } else {
+            navigate("/", { replace: true });
           }
-          window.history.replaceState({}, document.title, "/");
         })
         .catch(console.error);
     }
-  }, [token, me]);
+
+    // fetch pending friend requests
+    fetch(`${apiBase}/api/friends/requests/incoming`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(res => res.ok ? res.json() : [])
+      .then(setFriendRequests)
+      .catch(console.error);
+  }, [token, me, navigate]);
 
   // ── decrypt one incoming/historical message ─────────────────────
   const decryptIncoming = useCallback(
@@ -355,11 +375,10 @@ function App() {
 
   // ── recipient selection (from list view) ────────────────────────
   async function selectRecipient(user: string) {
-    setRecipient(user);
     setRecipientPublicKey(null);
     setMessages([]);
     setReplyTo(null);
-    setView("chat");
+    navigate(`/chat/${encodeURIComponent(user)}`);
     if (!token) return;
     try {
       const key = await fetchPublicKey(user, token);
@@ -472,6 +491,7 @@ function App() {
     setRemoteStream(null);
     stopCamera();
     setCallState({ kind: "idle" });
+    setCallMinimized(false);
     setIsMuted(false);
     setIsCameraOff(false);
   }
@@ -647,6 +667,7 @@ function App() {
     return () => clearTimeout(id);
   }, [callNotice]);
 
+
   // Page Visibility → push trigger
   useEffect(() => {
     if (!token) return;
@@ -682,6 +703,37 @@ function App() {
         }}
       />
     );
+  }
+
+  async function handleAcceptRequest(id: number) {
+    if (!token) return;
+    const res = await fetch(`${apiBase}/api/friends/requests/${id}/accept`, {
+      method: "PUT", headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      setFriendRequests(prev => prev.filter(r => r.id !== id));
+      // refresh user list so the new friend appears
+      fetch(`${apiBase}/api/users`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.ok ? r.json() : [])
+        .then(setUsers).catch(console.error);
+    }
+  }
+
+  async function handleRejectRequest(id: number) {
+    if (!token) return;
+    const res = await fetch(`${apiBase}/api/friends/requests/${id}/reject`, {
+      method: "PUT", headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) setFriendRequests(prev => prev.filter(r => r.id !== id));
+  }
+
+  async function handleSendRequest(shareId: string) {
+    if (!token) return;
+    await fetch(`${apiBase}/api/friends/request`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ toShareId: shareId }),
+    });
   }
 
   const handleUpdateProfile = async (preferredName: string, file: File | null) => {
@@ -731,7 +783,7 @@ function App() {
         />
       )}
 
-      {(callState.kind === "outgoing" || callState.kind === "active") && (
+      {(callState.kind === "outgoing" || callState.kind === "active") && !callMinimized && (
         <VideoCallScreen
           peer={callState.kind === "outgoing" ? callState.to : callState.peer}
           callKind={callState.kind}
@@ -739,6 +791,7 @@ function App() {
           localStream={localStream}
           remoteStream={remoteStream}
           onHangUp={hangUp}
+          onMinimize={() => setCallMinimized(true)}
           onToggleMute={toggleMute}
           onToggleCamera={toggleCamera}
           onFlipCamera={flipCamera}
@@ -747,14 +800,48 @@ function App() {
         />
       )}
 
+      {(callState.kind === "outgoing" || callState.kind === "active") && callMinimized && (
+        <div
+          className="fixed bottom-20 left-4 right-4 z-50 bg-[#0b0f14] rounded-2xl shadow-2xl flex items-center gap-3 px-4 py-3 border border-white/10"
+          onClick={() => setCallMinimized(false)}
+          style={{ cursor: "pointer" }}
+        >
+          <div
+            className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-base shrink-0"
+            style={{ background: "#3b82f6" }}
+          >
+            {(callState.kind === "outgoing" ? callState.to : callState.peer)[0]?.toUpperCase()}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm font-semibold truncate">
+              {callState.kind === "outgoing" ? callState.to : callState.peer}
+            </p>
+            <p className="text-white/50 text-xs">
+              {callState.kind === "active" ? "Tap to return" : "Calling…"}
+            </p>
+          </div>
+          <button
+            onClick={e => { e.stopPropagation(); hangUp(); }}
+            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+            style={{ background: "#ef4444" }}
+            aria-label="End call"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" style={{ transform: "rotate(135deg)" }}>
+              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+            </svg>
+          </button>
+        </div>
+      )}
+
       {view === "settings" && (
         <SettingsView
           me={me}
           meProfile={meProfile}
+          shareId={meProfile?.shareId}
           pushEnabled={pushEnabled}
           pushError={pushError}
           isBrave={isBrave}
-          onBack={() => setView("list")}
+          onBack={() => navigate(-1)}
           onEnableNotifications={handleEnableNotifications}
           onLogout={handleLogout}
           onUpdateProfile={handleUpdateProfile}
@@ -783,11 +870,7 @@ function App() {
           onStartVoiceCall={() => startCall("audio")}
           onStartVideoCall={() => startCall("video")}
           onHangUp={hangUp}
-          onBack={() => {
-            setView("list");
-            setRecipient("");
-            setReplyTo(null);
-          }}
+          onBack={() => navigate(-1)}
         />
       )}
 
@@ -797,7 +880,11 @@ function App() {
           users={users}
           recipient={recipient}
           onSelectUser={selectRecipient}
-          onOpenSettings={() => setView("settings")}
+          onOpenSettings={() => navigate("/settings")}
+          friendRequests={friendRequests}
+          onAcceptRequest={handleAcceptRequest}
+          onRejectRequest={handleRejectRequest}
+          onSendRequest={handleSendRequest}
         />
       )}
     </AppShell>

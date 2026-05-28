@@ -153,6 +153,7 @@ type Props = {
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
   onHangUp: () => void;
+  onMinimize: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onFlipCamera: () => void;
@@ -167,6 +168,7 @@ export function VideoCallScreen({
   localStream,
   remoteStream,
   onHangUp,
+  onMinimize,
   onToggleMute,
   onToggleCamera,
   onFlipCamera,
@@ -310,6 +312,18 @@ export function VideoCallScreen({
             <p className="text-white/50 text-xs">Ringing…</p>
           )}
         </div>
+        <button
+          onClick={onMinimize}
+          className="mt-3 p-2 rounded-full hover:bg-white/10 transition-colors"
+          aria-label="Minimize call"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+            <polyline points="4 14 10 14 10 20" />
+            <polyline points="20 10 14 10 14 4" />
+            <line x1="10" x2="3" y1="14" y2="21" />
+            <line x1="21" x2="14" y1="3" y2="10" />
+          </svg>
+        </button>
       </div>
 
       {/* ── Local video PiP (draggable) ────────────────────────────── */}

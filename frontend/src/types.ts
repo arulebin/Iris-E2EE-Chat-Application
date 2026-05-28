@@ -4,6 +4,15 @@ export type UserProfile = {
   username: string;
   preferredName?: string;
   avatarUrl?: string;
+  shareId?: string;
+};
+
+export type FriendRequest = {
+  id: number;
+  fromUser: string;
+  toUser: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  createdAt: string;
 };
 
 export type ChatMessage = {

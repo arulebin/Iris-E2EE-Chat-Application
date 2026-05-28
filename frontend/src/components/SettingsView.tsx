@@ -13,6 +13,7 @@ type Props = {
   onEnableNotifications: () => void;
   onLogout: () => void;
   onUpdateProfile: (name: string, file: File | null) => Promise<void>;
+  shareId?: string;
 };
 
 export function SettingsView({
@@ -24,14 +25,15 @@ export function SettingsView({
   onBack,
   onEnableNotifications,
   onLogout,
-  onUpdateProfile
+  onUpdateProfile,
+  shareId,
 }: Props) {
   const [preferredName, setPreferredName] = useState(meProfile?.preferredName || "");
   const [file, setFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const inviteUrl = `${window.location.origin}/?add=${me}`;
+  const inviteUrl = `${window.location.origin}/?add=${shareId ?? me}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteUrl);
