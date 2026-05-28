@@ -283,45 +283,74 @@ function App() {
     meRef.current = me;
   });
 
-  // WebSocket lifecycle: connects on login, stays up until logout
+  // WebSocket lifecycle: connects on login, reconnects with exponential backoff on drop
   useEffect(() => {
     if (!token) return;
-    const ws = new WebSocket(wsURL(`/ws/chat?token=${token}`));
-    wsRef.current = ws;
-    ws.onopen = () => {
-      ws.send(JSON.stringify({
-        type: "visibility",
-        state: document.hidden ? "hidden" : "visible",
-      }));
-    };
-    ws.onmessage = async (e) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data && typeof data.type === "string" && data.type.startsWith("call-")) {
-          await handleSignalRef.current?.(data as CallSignal);
-          return;
+
+    let destroyed = false;
+    let retryDelay = 1_000;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function connect() {
+      if (destroyed) return;
+      const ws = new WebSocket(wsURL(`/ws/chat?token=${token}`));
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        retryDelay = 1_000;
+        ws.send(JSON.stringify({
+          type: "visibility",
+          state: document.hidden ? "hidden" : "visible",
+        }));
+      };
+
+      ws.onmessage = async (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data && typeof data.type === "string" && data.type.startsWith("call-")) {
+            await handleSignalRef.current?.(data as CallSignal);
+            return;
+          }
+          const msg = data as ChatMessage;
+          const currentMe = meRef.current;
+          const currentRecipient = recipientRef.current;
+          const isCurrentChat =
+            (msg.from === currentMe && msg.to === currentRecipient) ||
+            (msg.from === currentRecipient && msg.to === currentMe);
+          if (isCurrentChat && decryptIncomingRef.current) {
+            const decrypted = await decryptIncomingRef.current(msg);
+            setMessages((prev) => {
+              const next = [...prev, decrypted];
+              if (currentMe && currentRecipient) {
+                set(`chat_history_${currentMe}_${currentRecipient}`, next).catch(console.error);
+              }
+              return next;
+            });
+          }
+        } catch {
+          // ignore non-JSON
         }
-        const msg = data as ChatMessage;
-        const currentMe = meRef.current;
-        const currentRecipient = recipientRef.current;
-        const isCurrentChat =
-          (msg.from === currentMe && msg.to === currentRecipient) ||
-          (msg.from === currentRecipient && msg.to === currentMe);
-        if (isCurrentChat && decryptIncomingRef.current) {
-          const decrypted = await decryptIncomingRef.current(msg);
-          setMessages((prev) => {
-            const next = [...prev, decrypted];
-            if (currentMe && currentRecipient) {
-              set(`chat_history_${currentMe}_${currentRecipient}`, next).catch(console.error);
-            }
-            return next;
-          });
+      };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        if (!destroyed) {
+          retryTimer = setTimeout(() => {
+            retryDelay = Math.min(retryDelay * 2, 30_000);
+            connect();
+          }, retryDelay);
         }
-      } catch {
-        // ignore non-JSON
-      }
+      };
+    }
+
+    connect();
+
+    return () => {
+      destroyed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      wsRef.current?.close();
+      wsRef.current = null;
     };
-    return () => ws.close();
   }, [token]);
 
   // ── recipient selection (from list view) ────────────────────────
