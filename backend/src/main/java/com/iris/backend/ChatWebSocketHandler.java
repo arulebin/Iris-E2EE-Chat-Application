@@ -86,6 +86,13 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             // messages broadcast normally; the receiving sessions decide what to do.
             if ("call-offer".equals(type)) {
                 sendToOneSession(to, forwarded.toString());
+                Set<WebSocketSession> recipientSessions = sessionsByUser.getOrDefault(to, Set.of());
+                boolean recipientActive = recipientSessions.stream()
+                    .anyMatch(s -> s.isOpen()
+                        && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE)));
+                if (!recipientActive) {
+                    pushNotificationService.sendToUser(to, "Incoming call", "Call from " + sender);
+                }
             } else {
                 sendToUser(to, forwarded.toString());
             }

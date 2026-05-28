@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -36,6 +37,23 @@ public class UserController {
         return userRepository.findByUsername(username)
                 .map(UserProfileDto::from)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+    }
+
+    @GetMapping("/users/by-share/{shareId}")
+    public UserProfileDto getUserByShareId(@PathVariable String shareId) {
+        return userRepository.findByShareId(shareId)
+                .map(UserProfileDto::from)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+    }
+
+    @GetMapping("/users/search")
+    public List<UserProfileDto> searchUsers(@RequestParam String q, Authentication auth) {
+        if (q == null || q.isBlank()) return List.of();
+        String me = auth.getName();
+        return userRepository.searchUsers(q.trim()).stream()
+                .filter(u -> !u.getUsername().equals(me))
+                .map(UserProfileDto::from)
+                .toList();
     }
 
     public record ProfileUpdateRequest(String preferredName, String avatarUrl) {}

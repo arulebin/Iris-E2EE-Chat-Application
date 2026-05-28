@@ -1,9 +1,8 @@
 package com.iris.backend;
 
 import jakarta.persistence.*;
-import jakarta.websocket.Decoder.Text;
-
 import java.time.Instant;
+import java.util.UUID;
 
 @Entity
 @Table(name = "users")  // 'user' is a reserved keyword in many SQL dialects, including Postgres — avoid it as a table name
@@ -12,6 +11,9 @@ public class User {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    @Column(unique = true, length = 36)
+    private String shareId = UUID.randomUUID().toString();
 
     @Column(nullable = false, unique = true, length = 64)
     private String username;
@@ -47,6 +49,7 @@ public class User {
 
     // Getters (JPA can use field access, but other code needs these)
     public Long getId() { return id; }
+    public String getShareId() { return shareId; }
     public String getUsername() { return username; }
     public String getPasswordHash() { return passwordHash; }
     public Instant getCreatedAt() { return createdAt; }
