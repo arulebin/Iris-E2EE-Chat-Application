@@ -90,7 +90,7 @@ function SnapPlaceholder({
     : `Tap to view · ${mimeType?.startsWith("video/") ? "video" : "photo"}`;
 
   const baseClass = isOwn
-    ? "bg-navy text-white rounded-br-md"
+    ? "bg-primary text-white rounded-br-md"
     : "bg-card text-navy rounded-bl-md";
 
   return (
@@ -119,12 +119,12 @@ function ReplyPreview({ replyTo, isOwnBubble }: { replyTo: ChatMessage; isOwnBub
       : "Photo"
     : replyTo.content || "";
 
-  // WhatsApp style reply box with a color-coded left border
+  // Quoted-reply box with a color-coded left border, tuned per bubble color.
   const containerClass = isOwnBubble
-    ? "bg-black/20 border-blue-500 text-white"
+    ? "bg-white/15 border-white/70 text-white"
     : "bg-black/5 border-primary text-navy";
 
-  const nameColor = isOwnBubble ? "text-blue-500" : "text-primary";
+  const nameColor = isOwnBubble ? "text-white/90" : "text-primary";
 
   return (
     <div className={`text-xs rounded border-l-[4px] px-2 py-1 mb-1 max-w-full ${containerClass}`}>
@@ -206,7 +206,7 @@ export function MessageBubble({
             <div
               className={`px-3 py-2 rounded-2xl text-[14px] leading-snug shadow-sm wrap-break-word relative pb-5 ${
                 isOwn
-                  ? "bg-navy text-white rounded-br-md"
+                  ? "bg-primary text-white rounded-br-md"
                   : "bg-card text-navy rounded-bl-md"
               }`}
             >
@@ -227,13 +227,13 @@ export function MessageBubble({
     return (
       <div className="flex items-stretch gap-1 self-end max-w-[85%]">
         {onReply && <ReplyButton onReply={onReply} />}
-        <div className="flex flex-col bg-navy text-white p-1.5 rounded-2xl rounded-br-md shadow-sm min-w-[80px] relative">
+        <div className="flex flex-col bg-primary text-white p-1.5 rounded-2xl rounded-br-md shadow-sm min-w-[80px] relative">
           {replyTo && <ReplyPreview replyTo={replyTo} isOwnBubble />}
           <div className="text-[15px] leading-snug wrap-break-word px-2 pb-3">
             {content}
             <div className="text-[10px] text-white/60 absolute bottom-1.5 right-3 flex items-center gap-1">
               {timestamp}
-              <CheckIcon className="w-3 h-3 text-primary" />
+              <CheckIcon className="w-3 h-3 text-white/80" />
             </div>
           </div>
         </div>

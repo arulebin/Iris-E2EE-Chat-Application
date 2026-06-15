@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import type { ChatMessage } from "../types";
 import { CameraCapture } from "./CameraCapture";
-import { CameraIcon, ImageIcon, SmileIcon, TimerIcon, XIcon } from "./icons";
+import { CameraIcon, ImageIcon, SendIcon, SmileIcon, TimerIcon, XIcon } from "./icons";
 
 type Props = {
   value: string;
@@ -193,14 +193,26 @@ export function MessageInput({
           >
             <ImageIcon />
           </button>
-          <button
-            type="button"
-            className="text-muted hover:text-navy p-1"
-            aria-label="Emoji (coming soon)"
-            disabled
-          >
-            <SmileIcon />
-          </button>
+          {value.trim() ? (
+            <button
+              type="button"
+              onClick={() => !disabled && onSend()}
+              disabled={disabled}
+              className="iris-fill -mr-1 w-9 h-9 rounded-full flex items-center justify-center shadow-sm transition-transform active:scale-90 disabled:opacity-50"
+              aria-label="Send message"
+            >
+              <SendIcon className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="text-muted hover:text-navy p-1"
+              aria-label="Emoji (coming soon)"
+              disabled
+            >
+              <SmileIcon />
+            </button>
+          )}
         </div>
         {uploadError && (
           <p className="text-xs text-red-500 mt-1.5 px-2">{uploadError}</p>

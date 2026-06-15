@@ -124,7 +124,7 @@ export function SettingsView({
               <QRCodeSVG 
                 value={inviteUrl} 
                 size={180} 
-                fgColor="#3f51b5" 
+                fgColor="#5b5bd6"
                 imageSettings={meProfile?.avatarUrl ? {
                   src: `/api/media/profile/${meProfile.avatarUrl}`,
                   height: 48,

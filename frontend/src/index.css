@@ -1,19 +1,27 @@
 @import "tailwindcss";
 
-/* Chatx design tokens — used as bg-bg, text-navy, bg-primary, etc.
-   Tailwind v4 picks these up from @theme automatically. */
+/* ── Iris design tokens ───────────────────────────────────────────────────
+   "Iris Light" — quiet cool-white daylight, deep ink text, a single
+   iris-violet accent used with restraint. Tailwind v4 reads these from
+   @theme: bg-bg, text-navy (ink), bg-primary (iris), text-muted, etc. */
 @theme {
-  --color-bg: #dce6f0;
-  --color-card: #ffffff;
-  --color-primary: #1a6bff;
-  --color-primary-hover: #0f5ce0;
-  --color-navy: #1f2a44;
-  --color-navy-muted: #2a3654;
-  --color-muted: #90a0b5;
-  --color-muted-soft: #b4c0d2;
-  --color-online: #22c55e;
+  --color-bg: #f7f8fb;          /* cool near-white surface          */
+  --color-card: #ffffff;        /* raised cards / incoming bubbles  */
+  --color-primary: #5b5bd6;     /* iris — primary actions + "you"   */
+  --color-primary-hover: #4b4bc0;
+  --color-navy: #14181f;        /* ink — primary text               */
+  --color-navy-muted: #2a3142;
+  --color-muted: #8a93a3;       /* secondary text                   */
+  --color-muted-soft: #c9d0db;  /* hairlines, tracks                */
+  --color-online: #10b981;
 
-  --font-sans: "Nunito Sans", "Inter", system-ui, -apple-system, sans-serif;
+  --font-sans: "Plus Jakarta Sans", "Inter", system-ui, -apple-system, sans-serif;
+}
+
+/* The one signature gradient — the rainbow path Iris carries messages along.
+   Reserved for the wordmark, the send button, and the FAB. Nowhere else. */
+:root {
+  --iris-gradient: linear-gradient(135deg, #5b5bd6 0%, #7c5cff 55%, #9d7bff 100%);
 }
 
 html, body, #root {
@@ -79,4 +87,36 @@ textarea,
 }
 .overflow-y-auto::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ── Signature: the Iris mark ─────────────────────────────────────────────
+   The wordmark and primary actions wear the iris gradient; everything else
+   stays flat and quiet so this stays the one thing you remember. */
+.iris-wordmark {
+  background: var(--iris-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.iris-fill {
+  background: var(--iris-gradient);
+  color: #fff;
+}
+
+/* Splash: rings breathe outward once, wordmark rises in. */
+@keyframes iris-breathe {
+  from { transform: scale(0.82); opacity: 0; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+@keyframes iris-rise {
+  from { transform: translateY(8px); opacity: 0; }
+  to   { transform: translateY(0);   opacity: 1; }
+}
+.iris-breathe { animation: iris-breathe 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.iris-rise    { animation: iris-rise 0.6s ease-out 0.15s both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .iris-breathe, .iris-rise { animation: none; }
 }

@@ -4,6 +4,7 @@ import { Avatar } from "./Avatar";
 import type { UserProfile, FriendRequest, ChatMessage } from "../types";
 import {
   ChatBubbleIcon,
+  IrisMark,
   NewChatIcon,
   SearchIcon,
   SettingsIcon,
@@ -144,7 +145,10 @@ export function ChatListView({
     <div className="flex flex-col h-full bg-bg">
       {/* Top bar */}
       <header className="px-5 pt-6 pb-3 flex items-center justify-between">
-        <h1 className="text-3xl font-extrabold text-navy">Iris</h1>
+        <div className="flex items-center gap-2">
+          <IrisMark className="w-7 h-7" />
+          <h1 className="text-3xl font-extrabold tracking-tight iris-wordmark">Iris</h1>
+        </div>
         <div className="flex items-center gap-3">
           {/* Friend requests bell */}
           <button
@@ -191,7 +195,7 @@ export function ChatListView({
         <div className="bg-muted-soft/40 rounded-full p-1 flex">
           <button
             className={`flex-1 py-2 text-sm font-bold rounded-full transition ${
-              activeTab === "messages" ? "bg-navy text-white shadow" : "text-navy"
+              activeTab === "messages" ? "bg-primary text-white shadow" : "text-navy"
             }`}
           >
             Messages
@@ -261,7 +265,7 @@ export function ChatListView({
       {/* FAB */}
       <button
         onClick={() => setShowSearch(true)}
-        className="absolute bottom-6 right-6 sm:bottom-8 sm:right-8 w-14 h-14 bg-navy hover:bg-navy/90 text-white rounded-full shadow-lg flex items-center justify-center"
+        className="iris-fill absolute bottom-6 right-6 sm:bottom-8 sm:right-8 w-14 h-14 text-white rounded-full shadow-lg flex items-center justify-center transition-transform active:scale-90"
         aria-label="New chat"
       >
         <NewChatIcon />
@@ -314,7 +318,7 @@ export function ChatListView({
                   ) : (
                     <button
                       onClick={() => handleSendRequest(u)}
-                      className="text-xs font-bold text-white bg-navy px-3 py-1.5 rounded-full"
+                      className="text-xs font-bold text-white bg-primary px-3 py-1.5 rounded-full active:scale-95 transition-transform"
                     >
                       Connect
                     </button>
@@ -361,7 +365,7 @@ export function ChatListView({
                       </button>
                       <button
                         onClick={() => onAcceptRequest(req.id)}
-                        className="text-xs font-bold text-white bg-navy px-3 py-1.5 rounded-full"
+                        className="text-xs font-bold text-white bg-primary px-3 py-1.5 rounded-full active:scale-95 transition-transform"
                       >
                         Accept
                       </button>

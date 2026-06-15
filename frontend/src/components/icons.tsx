@@ -2,6 +2,50 @@
 
 type IconProps = { className?: string };
 
+// Signature mark: an eye-iris / camera aperture — "private sight", and the
+// concentric path a message travels between two people. Wears the iris gradient.
+export const IrisMark = ({ className = "w-8 h-8" }: IconProps) => (
+  <svg className={className} viewBox="0 0 32 32" fill="none">
+    <defs>
+      <linearGradient id="irisGrad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#5B5BD6" />
+        <stop offset="0.55" stopColor="#7C5CFF" />
+        <stop offset="1" stopColor="#9D7BFF" />
+      </linearGradient>
+    </defs>
+    <circle cx="16" cy="16" r="13" stroke="url(#irisGrad)" strokeWidth="2.4" />
+    <circle cx="16" cy="16" r="6.5" stroke="url(#irisGrad)" strokeWidth="2.4" />
+    <circle cx="16" cy="16" r="2.2" fill="url(#irisGrad)" />
+  </svg>
+);
+
+export const SendIcon = ({ className = "w-5 h-5" }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M3.4 20.4 21 12 3.4 3.6 3 10l12 2-12 2 .4 6.4z" />
+  </svg>
+);
+
+export const UserIcon = ({ className = "w-5 h-5" }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21a8 8 0 0 1 16 0" />
+  </svg>
+);
+
+export const LockIcon = ({ className = "w-5 h-5" }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+    <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+  </svg>
+);
+
+export const EyeIcon = ({ className = "w-5 h-5" }: IconProps) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
 export const SearchIcon = ({ className = "w-6 h-6" }: IconProps) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="11" cy="11" r="7" />

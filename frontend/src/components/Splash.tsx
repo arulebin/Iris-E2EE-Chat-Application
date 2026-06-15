@@ -1,18 +1,20 @@
-// Brief splash on initial load. Mirrors the Chatx Figma's intro screen.
+import { IrisMark } from "./icons";
+
+// Opening moment: the iris mark resolves out of its own concentric rings,
+// then the wordmark rises in. One orchestrated beat — nothing more.
 export function Splash() {
   return (
     <div className="min-h-screen bg-bg flex flex-col items-center justify-center px-8">
-      <div className="relative">
-        {/* Outer ring */}
-        <div className="w-40 h-40 rounded-full border-[10px] border-primary flex items-center justify-center">
-          <span className="text-primary font-extrabold text-3xl tracking-tight">Iris</span>
-        </div>
-        {/* Tail / paper plane shape */}
-        <div className="absolute -bottom-3 -left-2 w-10 h-10 bg-primary rotate-45 rounded-tl-md" />
+      <div className="iris-breathe relative flex items-center justify-center w-44 h-44">
+        <span className="absolute inset-0 rounded-full border border-primary/15" />
+        <span className="absolute inset-5 rounded-full border border-primary/25" />
+        <span className="absolute inset-10 rounded-full border border-primary/40" />
+        <IrisMark className="w-16 h-16" />
       </div>
-      <p className="mt-12 text-primary font-semibold text-xl text-center">
-        Stay connected with privacy
-      </p>
+      <h1 className="iris-rise mt-10 text-4xl font-extrabold tracking-tight iris-wordmark">
+        Iris
+      </h1>
+      <p className="iris-rise mt-2 text-muted text-sm">Private messages, end to end.</p>
     </div>
   );
 }
