@@ -53,7 +53,7 @@ export function ConversationHeader({
       {inCall ? (
         <button
           onClick={onHangUp}
-          className="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5"
+          className="bg-danger hover:bg-danger-hover text-white px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5"
         >
           <PhoneIcon className="w-4 h-4 rotate-[135deg]" />
           End

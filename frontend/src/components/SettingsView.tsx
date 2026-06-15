@@ -2,6 +2,7 @@ import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { BackIcon, BellIcon, LogoutIcon } from "./icons";
 import { Avatar } from "./Avatar";
+import { getThemePref, setThemePref, type ThemePref } from "../lib/theme";
 
 type Props = {
   me: string | null;
@@ -32,6 +33,9 @@ export function SettingsView({
   const [file, setFile] = useState<File | null>(null);
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [themePref, setLocalTheme] = useState<ThemePref>(getThemePref());
+
+  const changeTheme = (p: ThemePref) => { setLocalTheme(p); setThemePref(p); };
 
   const inviteUrl = `${window.location.origin}/?add=${shareId ?? me}`;
 
@@ -103,7 +107,7 @@ export function SettingsView({
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
             Profile Info
           </p>
-          <div className="bg-card rounded-2xl px-4 py-3 shadow-sm flex flex-col gap-2">
+          <div className="bg-card rounded-2xl px-4 py-3 shadow-sm dark:border dark:border-muted-soft flex flex-col gap-2">
             <label className="text-xs text-muted">Preferred Name (visible to others)</label>
             <input 
               type="text" 
@@ -117,10 +121,29 @@ export function SettingsView({
 
         <section>
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+            Appearance
+          </p>
+          <div className="bg-card rounded-2xl p-1.5 shadow-sm dark:border dark:border-muted-soft flex gap-1">
+            {(["system", "light", "dark"] as ThemePref[]).map((opt) => (
+              <button
+                key={opt}
+                onClick={() => changeTheme(opt)}
+                className={`flex-1 py-2 text-sm font-bold rounded-xl capitalize transition ${
+                  themePref === opt ? "bg-primary text-white shadow" : "text-muted hover:text-navy"
+                }`}
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
             Share Profile
           </p>
-          <div className="bg-card rounded-2xl flex flex-col items-center p-6 shadow-sm gap-4">
-            <div className="bg-white p-2 rounded-xl shadow-sm">
+          <div className="bg-card rounded-2xl flex flex-col items-center p-6 shadow-sm dark:border dark:border-muted-soft gap-4">
+            <div className="bg-white p-2 rounded-xl shadow-sm border border-muted-soft">
               <QRCodeSVG 
                 value={inviteUrl} 
                 size={180} 
@@ -147,7 +170,7 @@ export function SettingsView({
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
             Notifications
           </p>
-          <div className="bg-card rounded-2xl px-4 py-3 shadow-sm">
+          <div className="bg-card rounded-2xl px-4 py-3 shadow-sm dark:border dark:border-muted-soft">
             {pushEnabled ? (
               <p className="flex items-center gap-2 text-navy text-sm">
                 <BellIcon />
@@ -163,7 +186,7 @@ export function SettingsView({
               </button>
             )}
             {pushError && (
-              <p className="text-xs text-red-500 mt-2">{pushError}</p>
+              <p className="text-xs text-danger mt-2">{pushError}</p>
             )}
             {isBrave && !pushEnabled && (
               <p className="text-xs text-muted mt-2 leading-snug">
@@ -176,7 +199,7 @@ export function SettingsView({
 
         <button
           onClick={onLogout}
-          className="mt-4 mb-4 bg-card hover:bg-card/80 text-red-500 font-semibold py-3 rounded-2xl shadow-sm flex items-center justify-center gap-2"
+          className="mt-4 mb-4 bg-card hover:bg-card/80 text-danger font-semibold py-3 rounded-2xl shadow-sm dark:border dark:border-muted-soft flex items-center justify-center gap-2"
         >
           <LogoutIcon />
           Log out

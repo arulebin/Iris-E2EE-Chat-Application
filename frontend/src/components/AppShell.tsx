@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-dvh bg-bg flex items-center justify-center sm:p-4">
-      <div className="relative w-full sm:max-w-md h-dvh sm:h-[90vh] sm:max-h-225 bg-bg sm:rounded-3xl sm:shadow-xl flex flex-col overflow-hidden">
+      <div className="relative w-full sm:max-w-md h-dvh sm:h-[90vh] sm:max-h-225 bg-bg sm:rounded-3xl sm:shadow-xl dark:sm:ring-1 dark:sm:ring-muted-soft flex flex-col overflow-hidden">
         {children}
       </div>
     </div>

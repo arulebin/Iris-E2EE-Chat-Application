@@ -120,7 +120,7 @@ export function AuthView({
           </button>
         </form>
 
-        {error && <p className="text-red-600 text-sm mt-3 text-center">{error}</p>}
+        {error && <p className="text-danger text-sm mt-3 text-center">{error}</p>}
       </div>
 
       {/* Trust line — the reason this product exists, stated plainly */}

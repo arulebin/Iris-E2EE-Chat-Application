@@ -143,6 +143,37 @@ Once your `.env` file is populated:
 docker-compose up -d --build
 ```
 
+### Option 3: Deploying Natively on Linux (Without Docker)
+
+If you prefer to run the backend natively as a standard Linux service without Docker:
+
+**1. Install Java 25+**
+Ensure your Linux server has JDK 25 or 26 installed.
+```bash
+sudo apt update
+sudo apt install openjdk-25-jdk # Or use SDKMAN/Adoptium if 25/26 is not in your package manager
+```
+
+**2. Export Environment Variables**
+You must provide the same environment variables listed in the `.env` setup above. You can put these in a shell script, your `.bashrc`, or a `systemd` service file.
+```bash
+export JWT_SECRET="your_secret"
+export CORS_ALLOWED_ORIGINS="https://chat.your-domain.com"
+# ... export the rest of the variables
+```
+
+**3. Build and Run the Backend**
+```bash
+cd backend
+# Make the wrapper executable
+chmod +x mvnw
+# Build the production jar
+./mvnw clean package -DskipTests
+# Run the application
+java -jar target/backend-0.0.1-SNAPSHOT.jar
+```
+*Note: Make sure your server's firewall (e.g., `ufw`) allows traffic on port 8080 (or whatever port you proxy through Nginx).*
+
 ## 🔒 Security Model
 Iris employs End-to-End Encryption where messages are encrypted using an ephemeral AES key. That AES key is then dual-encrypted using the sender's and recipient's RSA public keys. 
 When logging in from a new device, a Key Encryption Key (KEK) is derived from your password to decrypt your centrally-backed-up private key securely.

@@ -3,6 +3,9 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App.tsx'
+import { initTheme } from './lib/theme'
+
+initTheme()
 
 // Register the service worker (the brain that powers offline + push).
 // Browsers ignore this if 'serviceWorker' isn't supported (very rare).

@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* Drive Tailwind's `dark:` variant off our manual [data-theme] attribute
+   (set by lib/theme.ts) rather than the OS preference, so the in-app toggle wins. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
 /* ── Iris design tokens ───────────────────────────────────────────────────
    "Iris Light" — quiet cool-white daylight, deep ink text, a single
    iris-violet accent used with restraint. Tailwind v4 reads these from
@@ -14,12 +18,33 @@
   --color-muted: #8a93a3;       /* secondary text                   */
   --color-muted-soft: #c9d0db;  /* hairlines, tracks                */
   --color-online: #10b981;
+  --color-danger: #dc2626;      /* errors, destructive actions      */
+  --color-danger-hover: #b91c1c;
 
   --font-sans: "Plus Jakarta Sans", "Inter", system-ui, -apple-system, sans-serif;
 }
 
+/* ── Iris Nocturne — dark theme ───────────────────────────────────────────
+   Redefining the same tokens flips the entire token-driven UI. Primary stays
+   #5b5bd6 so white-on-bubble keeps its AA contrast; muted-soft becomes a dark
+   hairline (every text use of it was migrated to text-muted). */
+:root[data-theme="dark"] {
+  --color-bg: #0b0d12;
+  --color-card: #161922;
+  --color-primary: #5b5bd6;
+  --color-primary-hover: #6d6de0;
+  --color-navy: #e7eaf1;
+  --color-navy-muted: #9aa3b2;
+  --color-muted: #8b93a3;
+  --color-muted-soft: #2c3340;
+  --color-online: #22c55e;
+  --color-danger: #f87171;
+  --color-danger-hover: #ef4444;
+}
+
 /* The one signature gradient — the rainbow path Iris carries messages along.
-   Reserved for the wordmark, the send button, and the FAB. Nowhere else. */
+   Reserved for the wordmark, the send button, and the FAB. Nowhere else.
+   Unchanged across themes (always reads on its violet surface). */
 :root {
   --iris-gradient: linear-gradient(135deg, #5b5bd6 0%, #7c5cff 55%, #9d7bff 100%);
 }

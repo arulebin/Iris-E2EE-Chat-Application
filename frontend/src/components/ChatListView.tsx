@@ -164,7 +164,7 @@ export function ChatListView({
               <line x1="14" x2="14" y1="1" y2="4" />
             </svg>
             {pendingCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center">
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-danger text-white text-[9px] font-bold rounded-full flex items-center justify-center">
                 {pendingCount > 9 ? "9+" : pendingCount}
               </span>
             )}
@@ -246,7 +246,7 @@ export function ChatListView({
                       <p className="text-xs text-muted truncate">
                         {pv ? (
                           <>
-                            {pv.fromMe && <span className="text-muted-soft">You: </span>}
+                            {pv.fromMe && <span className="text-muted">You: </span>}
                             {pv.text}
                           </>
                         ) : (

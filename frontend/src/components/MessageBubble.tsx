@@ -44,7 +44,7 @@ function MediaContent({
   }, [mediaId, token]);
 
   if (error) {
-    return <div className="text-xs text-red-300 italic">[{error}]</div>;
+    return <div className="text-xs text-danger italic">[{error}]</div>;
   }
   if (!src) {
     return (
@@ -122,7 +122,7 @@ function ReplyPreview({ replyTo, isOwnBubble }: { replyTo: ChatMessage; isOwnBub
   // Quoted-reply box with a color-coded left border, tuned per bubble color.
   const containerClass = isOwnBubble
     ? "bg-white/15 border-white/70 text-white"
-    : "bg-black/5 border-primary text-navy";
+    : "bg-navy/5 border-primary text-navy";
 
   const nameColor = isOwnBubble ? "text-white/90" : "text-primary";
 

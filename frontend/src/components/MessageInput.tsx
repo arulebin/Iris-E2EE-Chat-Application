@@ -215,7 +215,7 @@ export function MessageInput({
           )}
         </div>
         {uploadError && (
-          <p className="text-xs text-red-500 mt-1.5 px-2">{uploadError}</p>
+          <p className="text-xs text-danger mt-1.5 px-2">{uploadError}</p>
         )}
         {!uploadError && disabledHint && (
           <p className="text-xs text-muted mt-1.5 px-2">{disabledHint}</p>

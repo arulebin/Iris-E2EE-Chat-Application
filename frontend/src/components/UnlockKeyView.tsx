@@ -76,7 +76,7 @@ export function UnlockKeyView({ me, error, onUnlock, onLogout }: Props) {
           Unlock
         </button>
 
-        {error && <p className="text-red-600 text-sm text-center">{error}</p>}
+        {error && <p className="text-danger text-sm text-center">{error}</p>}
 
         <button
           type="button"
