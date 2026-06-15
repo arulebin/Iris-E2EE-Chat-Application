@@ -43,6 +43,8 @@ public class Message {
 
     private Long replyToId;
 
+    private Instant readAt;
+
     protected Message(){ }
 
     public Message(String sender, String recipient, String content,
@@ -74,4 +76,6 @@ public class Message {
     public Instant getViewedAt() { return viewedAt; }
     public void setViewedAt(Instant viewedAt) { this.viewedAt = viewedAt; }
     public Long getReplyToId() { return replyToId; }
+    public Instant getReadAt() { return readAt; }
+    public void setReadAt(Instant readAt) { this.readAt = readAt; }
 }

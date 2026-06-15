@@ -11,7 +11,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
-import java.util.HashSet;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -22,29 +22,32 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private final MessageRepository messageRepository;
     private final ObjectMapper objectMapper;
+    private final PushNotificationService pushNotificationService;
+    private final UserStatusService userStatusService;
 
     // username → that user's open sessions (could be multiple tabs)
     private final Map<String, Set<WebSocketSession>> sessionsByUser = new ConcurrentHashMap<>();
 
-    private final PushNotificationService pushNotificationService;
-
     public ChatWebSocketHandler(
             MessageRepository messageRepository,
             ObjectMapper objectMapper,
-            PushNotificationService pushNotificationService
+            PushNotificationService pushNotificationService,
+            UserStatusService userStatusService
     ) {
         this.messageRepository = messageRepository;
         this.objectMapper = objectMapper;
         this.pushNotificationService = pushNotificationService;
+        this.userStatusService = userStatusService;
     }
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {
         String username = (String) session.getAttributes().get("username");
-        session.getAttributes().put("visible", Boolean.TRUE);  // assume visible until told otherwise
+        session.getAttributes().put("visible", Boolean.TRUE);
         sessionsByUser
             .computeIfAbsent(username, k -> new CopyOnWriteArraySet<>())
             .add(session);
+        userStatusService.markOnline(username);
     }
 
     @Override
@@ -55,6 +58,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             userSessions.remove(session);
             if (userSessions.isEmpty()) {
                 sessionsByUser.remove(username);
+                userStatusService.markOffline(username);
             }
         }
     }
@@ -63,27 +67,44 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     protected void handleTextMessage(WebSocketSession session, TextMessage textMessage) throws Exception {
         String sender = (String) session.getAttributes().get("username");
 
-        // Inspect type without fully deserializing
         JsonNode root = objectMapper.readTree(textMessage.getPayload());
         String type = root.has("type") ? root.get("type").asText() : "chat";
 
         if ("visibility".equals(type)) {
-            // Tab signaled foreground/background — used to decide whether to push
             boolean visible = root.has("state") && "visible".equals(root.get("state").asText());
             session.getAttributes().put("visible", visible);
             return;
         }
 
-        if (type.startsWith("call-")) {
-            // Signaling — forward as-is to recipient with `from` added
+        if ("typing".equals(type)) {
             if (!root.has("to")) return;
             String to = root.get("to").asText();
-            ObjectNode forwarded =
-                    ((ObjectNode) root).put("from", sender);
-            // call-offer rings only ONE session (the most recently connected),
-            // so a user with several open tabs doesn't get every tab ringing —
-            // and a stale tab can't race-answer a fresh tab. All other call-*
-            // messages broadcast normally; the receiving sessions decide what to do.
+            ObjectNode forwarded = objectMapper.createObjectNode();
+            forwarded.put("type", "typing");
+            forwarded.put("from", sender);
+            forwarded.put("state", root.has("state") ? root.get("state").asText() : "start");
+            sendToUser(to, forwarded.toString());
+            return;
+        }
+
+        if ("read".equals(type)) {
+            // sender has read messages from `from`
+            if (!root.has("from")) return;
+            String from = root.get("from").asText();
+            int updated = messageRepository.markRead(from, sender, Instant.now());
+            if (updated > 0) {
+                ObjectNode receipt = objectMapper.createObjectNode();
+                receipt.put("type", "read-receipt");
+                receipt.put("by", sender);
+                sendToUser(from, receipt.toString());
+            }
+            return;
+        }
+
+        if (type.startsWith("call-")) {
+            if (!root.has("to")) return;
+            String to = root.get("to").asText();
+            ObjectNode forwarded = ((ObjectNode) root).put("from", sender);
             if ("call-offer".equals(type)) {
                 sendToOneSession(to, forwarded.toString());
                 Set<WebSocketSession> recipientSessions = sessionsByUser.getOrDefault(to, Set.of());
@@ -99,10 +120,9 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        // ── existing chat logic (encrypt, persist, route) ──
+        // ── chat message ──
         IncomingMessage incoming = objectMapper.treeToValue(root, IncomingMessage.class);
 
-        // Valid message must have a recipient AND either text content or a mediaId.
         if (incoming.to() == null || incoming.to().isBlank()) return;
         boolean hasText = incoming.content() != null && !incoming.content().isBlank();
         boolean hasMedia = incoming.mediaId() != null && !incoming.mediaId().isBlank();
@@ -118,15 +138,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             incoming.replyToId()
         ));
 
-        OutgoingMessage out = new OutgoingMessage(
-            saved.getId(),
-            saved.getSender(), saved.getRecipient(), saved.getContent(),
-            saved.getEncryptedKeyForSender(), saved.getEncryptedKeyForRecipient(),
-            saved.getMediaId(), saved.getMimeType(),
-            saved.isViewOnce(), saved.getViewedAt(),
-            saved.getSentAt(),
-            saved.getReplyToId()
-        );
+        OutgoingMessage out = toOutgoing(saved);
         String payload = objectMapper.writeValueAsString(out);
 
         java.util.Set<String> targets = new java.util.HashSet<>();
@@ -134,8 +146,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         targets.add(sender);
         for (String username : targets) sendToUser(username, payload);
 
-        // "Active" = at least one session is open AND its tab is visible.
-        // Backgrounded tabs no longer count as online — push fires for them so the user actually sees the notification.
         Set<WebSocketSession> recipientSessions = sessionsByUser.getOrDefault(incoming.to(), Set.of());
         boolean recipientActive = recipientSessions.stream()
             .anyMatch(s -> s.isOpen()
@@ -145,22 +155,27 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    static OutgoingMessage toOutgoing(Message m) {
+        return new OutgoingMessage(
+            m.getId(),
+            m.getSender(), m.getRecipient(), m.getContent(),
+            m.getEncryptedKeyForSender(), m.getEncryptedKeyForRecipient(),
+            m.getMediaId(), m.getMimeType(),
+            m.isViewOnce(), m.getViewedAt(),
+            m.getSentAt(),
+            m.getReplyToId(),
+            m.getReadAt()
+        );
+    }
 
     private void sendToUser(String username, String payload) throws IOException {
         Set<WebSocketSession> userSessions = sessionsByUser.get(username);
         if (userSessions == null) return;
         for (WebSocketSession s : userSessions) {
-            if (s.isOpen()) {
-                s.sendMessage(new TextMessage(payload));
-            }
+            if (s.isOpen()) s.sendMessage(new TextMessage(payload));
         }
     }
 
-    /**
-     * Send to exactly one session — the most recently added open session for the user.
-     * CopyOnWriteArraySet iterates in insertion order, so the last open session in
-     * iteration is the one most recently connected.
-     */
     private void sendToOneSession(String username, String payload) throws IOException {
         Set<WebSocketSession> userSessions = sessionsByUser.get(username);
         if (userSessions == null) return;
@@ -168,8 +183,6 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         for (WebSocketSession s : userSessions) {
             if (s.isOpen()) latest = s;
         }
-        if (latest != null) {
-            latest.sendMessage(new TextMessage(payload));
-        }
+        if (latest != null) latest.sendMessage(new TextMessage(payload));
     }
 }

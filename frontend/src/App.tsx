@@ -9,6 +9,7 @@ import {
 } from "./crypto";
 import { enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
+import { playRingback, playRingtone, stopTone } from "./lib/sound";
 import type { ChatMessage, CallState, CallMode, UserProfile, FriendRequest } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { uploadMedia } from "./lib/media";
@@ -64,10 +65,14 @@ function App() {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
   const handleSignalRef = useRef<((s: CallSignal) => Promise<void>) | null>(null);
+  const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioSinkRef = useRef<HTMLAudioElement | null>(null);
   const [callState, setCallState] = useState<CallState>({ kind: "idle" });
   const [callNotice, setCallNotice] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOff, setIsCameraOff] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(true);
+  const [reconnecting, setReconnecting] = useState(false);
 
   // ── friend requests ─────────────────────────────────────────────
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
@@ -485,6 +490,10 @@ function App() {
   }
 
   function teardownCall() {
+    if (ringTimeoutRef.current) {
+      clearTimeout(ringTimeoutRef.current);
+      ringTimeoutRef.current = null;
+    }
     pcRef.current?.close();
     pcRef.current = null;
     pendingIceRef.current = [];
@@ -494,6 +503,25 @@ function App() {
     setCallMinimized(false);
     setIsMuted(false);
     setIsCameraOff(false);
+    setSpeakerOn(true);
+    setReconnecting(false);
+  }
+
+  // React to the WebRTC connection lifecycle so a call that can't connect
+  // (e.g. no TURN server across networks) doesn't hang on "Connecting…".
+  function onPeerState(state: RTCPeerConnectionState) {
+    if (state === "connected") {
+      setReconnecting(false);
+    } else if (state === "disconnected") {
+      setReconnecting(true);
+    } else if (state === "failed") {
+      setCallNotice("Call failed — couldn't connect");
+      teardownCall();
+    }
+  }
+
+  function toggleSpeaker() {
+    setSpeakerOn((v) => !v);
   }
 
   function toggleMute() {
@@ -552,13 +580,20 @@ function App() {
       }
     }
 
-    const pc = await createPeerConnection(wsRef.current, recipient, token, setRemoteStream);
+    const pc = await createPeerConnection(wsRef.current, recipient, token, setRemoteStream, onPeerState);
     pcRef.current = pc;
     stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     wsRef.current.send(JSON.stringify({ type: "call-offer", to: recipient, payload: offer, mode }));
+
+    // Give up ringing after 30s if the other side never answers.
+    ringTimeoutRef.current = setTimeout(() => {
+      wsRef.current?.send(JSON.stringify({ type: "call-end", to: recipient }));
+      setCallNotice(`${recipient} didn't answer`);
+      teardownCall();
+    }, 30_000);
   }
 
   async function acceptCall() {
@@ -576,7 +611,7 @@ function App() {
       }
     }
 
-    const pc = await createPeerConnection(wsRef.current, from, token, setRemoteStream);
+    const pc = await createPeerConnection(wsRef.current, from, token, setRemoteStream, onPeerState);
     pcRef.current = pc;
     stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
 
@@ -623,6 +658,10 @@ function App() {
     if (signal.type === "call-answer") {
       const pc = pcRef.current;
       if (!pc) return;
+      if (ringTimeoutRef.current) {
+        clearTimeout(ringTimeoutRef.current);
+        ringTimeoutRef.current = null;
+      }
       await pc.setRemoteDescription(signal.payload);
       for (const c of pendingIceRef.current) {
         try { await pc.addIceCandidate(c); } catch (e) { console.error("addIceCandidate", e); }
@@ -666,6 +705,27 @@ function App() {
     const id = setTimeout(() => setCallNotice(null), 4000);
     return () => clearTimeout(id);
   }, [callNotice]);
+
+  // Ring tones: ringback while we call out, ringtone while a call comes in,
+  // silence once the call connects or ends.
+  useEffect(() => {
+    if (callState.kind === "outgoing") playRingback();
+    else if (callState.kind === "incoming") playRingtone();
+    else stopTone();
+    return () => stopTone();
+  }, [callState.kind]);
+
+  // Single, persistent remote-audio sink. Living at the app level (not inside
+  // VideoCallScreen) means audio keeps playing when the call is minimized and
+  // works identically for voice and video calls — exactly one element ever
+  // plays the remote audio, so there's no echo.
+  useEffect(() => {
+    if (audioSinkRef.current) audioSinkRef.current.srcObject = remoteStream;
+  }, [remoteStream]);
+
+  useEffect(() => {
+    if (audioSinkRef.current) audioSinkRef.current.muted = !speakerOn;
+  }, [speakerOn]);
 
 
   // Page Visibility → push trigger
@@ -772,6 +832,9 @@ function App() {
 
   return (
     <AppShell>
+      {/* Persistent remote-audio sink — the single source of call audio. */}
+      <audio ref={audioSinkRef} autoPlay className="hidden" />
+
       {callNotice && <CallNoticeBanner message={callNotice} />}
 
       {callState.kind === "incoming" && (
@@ -790,13 +853,16 @@ function App() {
           callMode={callState.mode}
           localStream={localStream}
           remoteStream={remoteStream}
+          reconnecting={reconnecting}
           onHangUp={hangUp}
           onMinimize={() => setCallMinimized(true)}
           onToggleMute={toggleMute}
           onToggleCamera={toggleCamera}
+          onToggleSpeaker={toggleSpeaker}
           onFlipCamera={flipCamera}
           isMuted={isMuted}
           isCameraOff={isCameraOff}
+          speakerOn={speakerOn}
         />
       )}
 
@@ -865,8 +931,6 @@ function App() {
           onStartReply={setReplyTo}
           onCancelReply={() => setReplyTo(null)}
           callState={callState}
-          localStream={localStream}
-          remoteStream={remoteStream}
           onStartVoiceCall={() => startCall("audio")}
           onStartVideoCall={() => startCall("video")}
           onHangUp={hangUp}

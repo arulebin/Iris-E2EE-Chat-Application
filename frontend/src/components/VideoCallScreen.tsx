@@ -152,13 +152,16 @@ type Props = {
   callMode: "audio" | "video";
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+  reconnecting?: boolean;
   onHangUp: () => void;
   onMinimize: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
+  onToggleSpeaker: () => void;
   onFlipCamera: () => void;
   isMuted: boolean;
   isCameraOff: boolean;
+  speakerOn: boolean;
 };
 
 export function VideoCallScreen({
@@ -167,29 +170,40 @@ export function VideoCallScreen({
   callMode,
   localStream,
   remoteStream,
+  reconnecting,
   onHangUp,
   onMinimize,
   onToggleMute,
   onToggleCamera,
+  onToggleSpeaker,
   onFlipCamera,
   isMuted,
   isCameraOff,
+  speakerOn,
 }: Props) {
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [speakerOn, setSpeakerOn] = useState(true);
   const timer = useCallTimer(callKind === "active");
   const pip = useDraggable("top-right");
 
-  const isConnected = callKind === "active" && remoteStream;
+  const connected = callKind === "active" && !!remoteStream;
+  const isConnected = connected;
 
-  // Safely attach streams using callback refs so they work across mounts/unmounts
+  // Status text shown over the avatar. Once connected we show the live timer.
+  const centerStatus =
+    callKind === "outgoing" ? "Calling…"
+    : reconnecting          ? "Reconnecting…"
+    : !connected            ? "Connecting…"
+    :                         null;
+
+  // Attach the remote video via a callback ref. Audio is handled by a single
+  // app-level <audio> sink, so this element stays muted to avoid double audio.
   const remoteRef = useCallback(
     (node: HTMLVideoElement | null) => {
       if (node && remoteStream) node.srcObject = remoteStream;
-      if (node) node.muted = !speakerOn;
+      if (node) node.muted = true;
     },
-    [remoteStream, speakerOn]
+    [remoteStream]
   );
 
   const localRef = useCallback(
@@ -277,8 +291,8 @@ export function VideoCallScreen({
           </div>
 
           <p className="text-white text-2xl font-semibold tracking-wide">{peer}</p>
-          <p className="text-white/50 text-sm mt-2 animate-pulse">
-            {callKind === "outgoing" ? "Calling…" : "Connecting…"}
+          <p className={`text-white/60 text-sm mt-2 ${centerStatus ? "animate-pulse" : "tabular-nums"}`}>
+            {centerStatus ?? timer}
           </p>
 
           {/* E2EE badge */}
@@ -306,7 +320,9 @@ export function VideoCallScreen({
         <div className="flex-1 min-w-0 pt-3">
           <p className="text-white font-semibold text-base truncate">{peer}</p>
           {callKind === "active" && (
-            <p className="text-white/60 text-xs tabular-nums">{timer}</p>
+            <p className={`text-xs ${reconnecting ? "text-amber-400 animate-pulse" : "text-white/60 tabular-nums"}`}>
+              {reconnecting ? "Reconnecting…" : timer}
+            </p>
           )}
           {callKind === "outgoing" && (
             <p className="text-white/50 text-xs">Ringing…</p>
@@ -422,7 +438,7 @@ export function VideoCallScreen({
 
           {/* Speaker */}
           <button
-            onClick={() => setSpeakerOn((v) => !v)}
+            onClick={onToggleSpeaker}
             className="flex flex-col items-center gap-1.5"
             aria-label={speakerOn ? "Speaker off" : "Speaker on"}
           >

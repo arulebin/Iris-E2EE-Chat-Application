@@ -14,5 +14,6 @@ public record OutgoingMessage(
         boolean viewOnce,
         Instant viewedAt,
         Instant sentAt,
-        Long replyToId
+        Long replyToId,
+        Instant readAt
 ) {}

@@ -72,7 +72,7 @@ export function MessageList({ messages, me, token, onMarkSnapViewed, onStartRepl
 
   return (
     <>
-      <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
+      <div className="selectable flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
         {messages[0] && (
           <div className="flex items-center gap-3 my-2">
             <div className="flex-1 h-px bg-muted-soft/50" />

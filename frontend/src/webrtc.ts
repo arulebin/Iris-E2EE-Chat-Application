@@ -19,9 +19,16 @@ async function getIceServers(token: string | null): Promise<RTCConfiguration> {
   } catch (e) {
     console.error('[WebRTC] Failed to fetch TURN credentials:', e);
   }
-  // Fallback to minimal STUN if backend missing/failing
+  // Fallback to public STUN if backend missing/failing.
+  // NOTE: STUN alone only connects peers that can reach each other directly
+  // (same LAN, or simple NATs). Cross-network calls need the TURN relay from
+  // /api/turn/credentials — without it, the connection will end up "failed".
+  console.warn('[WebRTC] Using STUN-only fallback — cross-network calls need a TURN server.');
   return {
-    iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }]
+    iceServers: [
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:stun.l.google.com:19302' },
+    ],
   };
 }
 
@@ -34,7 +41,8 @@ export async function createPeerConnection(
   ws: WebSocket,
   remoteUser: string,
   token: string | null,
-  onTrack: (stream: MediaStream) => void
+  onTrack: (stream: MediaStream) => void,
+  onStateChange?: (state: RTCPeerConnectionState) => void,
 ): Promise<RTCPeerConnection> {
   const rtcConfig = await getIceServers(token);
   const pc = new RTCPeerConnection(rtcConfig)
@@ -63,6 +71,7 @@ export async function createPeerConnection(
 
   pc.onconnectionstatechange = () => {
     console.log('[WebRTC] connection state:', pc.connectionState)
+    onStateChange?.(pc.connectionState)
   }
   
   pc.oniceconnectionstatechange = () => {

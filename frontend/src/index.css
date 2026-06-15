@@ -24,3 +24,59 @@ html, body, #root {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ── Native app feel ──────────────────────────────────────────────────────
+   Make the PWA behave like an installed app rather than a web page. */
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* No blue flash on tap (mobile) */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Kill rubber-band / pull-to-refresh; the app owns its own scrolling */
+html, body, #root {
+  overscroll-behavior: none;
+}
+
+/* Chrome (headers, buttons, lists) is non-selectable like a native UI.
+   touch-action: manipulation removes the 300ms tap delay + double-tap zoom. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: manipulation;
+}
+
+/* …but real content stays selectable / long-press-copyable */
+input,
+textarea,
+[contenteditable="true"],
+.selectable,
+.selectable * {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* Momentum scrolling + slim, unobtrusive scrollbars */
+.overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-muted-soft) transparent;
+}
+.overflow-y-auto::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background: var(--color-muted-soft);
+  border-radius: 3px;
+}
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent;
+}

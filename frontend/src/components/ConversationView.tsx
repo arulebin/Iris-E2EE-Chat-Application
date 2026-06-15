@@ -2,7 +2,6 @@ import type { CallState, ChatMessage, UserProfile } from "../types";
 import { ConversationHeader } from "./ConversationHeader";
 import { MessageList } from "./MessageList";
 import { MessageInput } from "./MessageInput";
-import { VideoGrid } from "./VideoGrid";
 
 type Props = {
   peer: string;
@@ -25,8 +24,6 @@ type Props = {
 
   // call-related
   callState: CallState;
-  localStream: MediaStream | null;
-  remoteStream: MediaStream | null;
   onStartVoiceCall: () => void;
   onStartVideoCall: () => void;
   onHangUp: () => void;
@@ -52,8 +49,6 @@ export function ConversationView(props: Props) {
     onStartReply,
     onCancelReply,
     callState,
-    localStream,
-    remoteStream,
     onStartVoiceCall,
     onStartVideoCall,
     onHangUp,
@@ -72,12 +67,6 @@ export function ConversationView(props: Props) {
         onStartVideoCall={onStartVideoCall}
         onHangUp={onHangUp}
       />
-
-      {(localStream || remoteStream) && (
-        <div className="px-4 pt-3">
-          <VideoGrid localStream={localStream} remoteStream={remoteStream} />
-        </div>
-      )}
 
       <MessageList
         messages={messages}

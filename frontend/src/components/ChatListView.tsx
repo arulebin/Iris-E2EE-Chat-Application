@@ -1,12 +1,41 @@
 import { useState, useRef, useEffect } from "react";
+import { get } from "idb-keyval";
 import { Avatar } from "./Avatar";
-import type { UserProfile, FriendRequest } from "../types";
+import type { UserProfile, FriendRequest, ChatMessage } from "../types";
 import {
   ChatBubbleIcon,
   NewChatIcon,
   SearchIcon,
   SettingsIcon,
 } from "./icons";
+
+type Preview = { text: string; time: string; fromMe: boolean };
+
+// Short, messenger-style relative time for the list ("14:32", "Yesterday", "Mon", "3 Jun").
+function relativeTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString())
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+    if (now.getTime() - d.getTime() < 7 * 86400000)
+      return d.toLocaleDateString([], { weekday: "short" });
+    return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  } catch {
+    return "";
+  }
+}
+
+function previewText(m: ChatMessage): string {
+  if (m.mediaId) {
+    if (m.viewOnce) return "📷 Snap";
+    return m.mimeType?.startsWith("video/") ? "🎥 Video" : "📷 Photo";
+  }
+  return m.content;
+}
 
 type Props = {
   me: string | null;
@@ -40,8 +69,45 @@ export function ChatListView({
   const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
   const [searching, setSearching] = useState(false);
   const [sentRequests, setSentRequests] = useState<Set<string>>(new Set());
+  const [previews, setPreviews] = useState<Record<string, Preview>>({});
   const searchInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Pull the last message of each conversation from the local (already-decrypted)
+  // IndexedDB cache so the list shows a real preview + timestamp like a native app.
+  useEffect(() => {
+    if (!me || users.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const map: Record<string, Preview> = {};
+      await Promise.all(
+        users.map(async (u) => {
+          try {
+            const hist = await get<ChatMessage[]>(`chat_history_${me}_${u.username}`);
+            if (!hist || hist.length === 0) return;
+            const last = hist[hist.length - 1];
+            map[u.username] = { text: previewText(last), time: last.sentAt, fromMe: last.from === me };
+          } catch {
+            /* no cached history for this user */
+          }
+        }),
+      );
+      if (!cancelled) setPreviews(map);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [me, users]);
+
+  // Most-recent conversation first; users without history keep their original order below.
+  const sortedUsers = [...users].sort((a, b) => {
+    const ta = previews[a.username]?.time;
+    const tb = previews[b.username]?.time;
+    if (ta && tb) return tb.localeCompare(ta);
+    if (ta) return -1;
+    if (tb) return 1;
+    return 0;
+  });
 
   useEffect(() => {
     if (showSearch) setTimeout(() => searchInputRef.current?.focus(), 50);
@@ -153,22 +219,41 @@ export function ChatListView({
           </div>
         ) : (
           <ul className="flex flex-col gap-1 py-2">
-            {users.map((u) => (
-              <li key={u.username}>
-                <button
-                  onClick={() => onSelectUser(u.username)}
-                  className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-2xl transition ${
-                    recipient === u.username ? "bg-card shadow-sm" : "hover:bg-card/60"
-                  }`}
-                >
-                  <Avatar name={u.preferredName || u.username} avatarUrl={u.avatarUrl} size="md" />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-bold text-navy truncate">{u.preferredName || u.username}</p>
-                    <p className="text-xs text-muted truncate">Tap to open chat</p>
-                  </div>
-                </button>
-              </li>
-            ))}
+            {sortedUsers.map((u) => {
+              const pv = previews[u.username];
+              return (
+                <li key={u.username}>
+                  <button
+                    onClick={() => onSelectUser(u.username)}
+                    className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-2xl transition ${
+                      recipient === u.username ? "bg-card shadow-sm" : "hover:bg-card/60 active:bg-card/80"
+                    }`}
+                  >
+                    <Avatar name={u.preferredName || u.username} avatarUrl={u.avatarUrl} size="md" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-navy truncate flex-1">{u.preferredName || u.username}</p>
+                        {pv && (
+                          <span className="text-[11px] text-muted shrink-0 font-medium">
+                            {relativeTime(pv.time)}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted truncate">
+                        {pv ? (
+                          <>
+                            {pv.fromMe && <span className="text-muted-soft">You: </span>}
+                            {pv.text}
+                          </>
+                        ) : (
+                          "Tap to open chat"
+                        )}
+                      </p>
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
