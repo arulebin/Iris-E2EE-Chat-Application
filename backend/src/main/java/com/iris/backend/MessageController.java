@@ -34,7 +34,8 @@ public class MessageController {
                 m.isViewOnce(),
                 m.getViewedAt(),
                 m.getSentAt(),
-                m.getReplyToId()
+                m.getReplyToId(),
+                m.getReadAt()
             ))
             .toList();
     }

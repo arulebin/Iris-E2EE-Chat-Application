@@ -1,5 +1,6 @@
 package com.iris.backend;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,9 +23,25 @@ public class KeyController {
     public ResponseEntity<Void> setMyKey(@RequestBody PublicKeyRequest req, Authentication auth) {
         User user = userRepository.findByUsername(auth.getName())
                 .orElseThrow();
+
+        // INSERT-ONCE. A user's identity key + encrypted backup are published exactly
+        // once. If one already exists, this POST is a second device, a race, or a
+        // re-upload after IndexedDB loss — anything that would OVERWRITE the existing
+        // key and orphan messages already encrypted to it. Refuse with 409 so the
+        // client recovers the existing backup instead of generating a new keypair.
+        if (user.getPublicKey() != null) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).build();
+        }
+
+        // First publish must be a complete, consistent triple so the server can never
+        // hold a public key whose matching backup is missing or from another keypair.
+        if (req.publicKey() == null || req.encryptedPrivateKey() == null || req.keySalt() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+
         user.setPublicKey(req.publicKey());
-        if (req.encryptedPrivateKey() != null) user.setEncryptedPrivateKey(req.encryptedPrivateKey());
-        if (req.keySalt() != null) user.setKeySalt(req.keySalt());
+        user.setEncryptedPrivateKey(req.encryptedPrivateKey());
+        user.setKeySalt(req.keySalt());
         userRepository.save(user);
         return ResponseEntity.ok().build();
     }

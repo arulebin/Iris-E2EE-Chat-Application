@@ -40,17 +40,50 @@ public class FriendController {
         String me = auth.getName();
         User target = userRepository.findByShareId(body.toShareId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        String them = target.getUsername();
 
-        if (target.getUsername().equals(me)) {
+        if (them.equals(me)) {
             return ResponseEntity.badRequest().body(Map.of("error", "Cannot send request to yourself"));
         }
 
-        if (friendRepository.existsByFromUserAndToUserAndStatus(me, target.getUsername(), FriendRequest.Status.PENDING)) {
-            return ResponseEntity.ok(Map.of("message", "Request already sent"));
+        // Look at any existing relationship in both directions. The unique
+        // constraint is on (from_user, to_user), so we reuse rows instead of
+        // inserting duplicates (which previously threw a 500).
+        var outgoing = friendRepository.findByFromUserAndToUser(me, them);
+        var incoming = friendRepository.findByFromUserAndToUser(them, me);
+
+        boolean connected =
+                outgoing.map(r -> r.getStatus() == FriendRequest.Status.ACCEPTED).orElse(false) ||
+                incoming.map(r -> r.getStatus() == FriendRequest.Status.ACCEPTED).orElse(false);
+        if (connected) {
+            return ResponseEntity.ok(Map.of("message", "Already connected"));
         }
 
-        FriendRequest req = friendRepository.save(new FriendRequest(me, target.getUsername()));
-        pushService.sendToUser(target.getUsername(), "Iris", me + " wants to connect with you");
+        // They already requested me → connecting back just accepts it (mutual).
+        if (incoming.isPresent() && incoming.get().getStatus() == FriendRequest.Status.PENDING) {
+            FriendRequest req = incoming.get();
+            req.setStatus(FriendRequest.Status.ACCEPTED);
+            friendRepository.save(req);
+            pushService.sendToUser(them, "Iris", me + " accepted your connection request");
+            return ResponseEntity.ok(toDto(req));
+        }
+
+        // I already have a row to them → reuse it: re-arm a rejected one, or
+        // report the still-pending one.
+        if (outgoing.isPresent()) {
+            FriendRequest req = outgoing.get();
+            if (req.getStatus() == FriendRequest.Status.PENDING) {
+                return ResponseEntity.ok(Map.of("message", "Request already sent"));
+            }
+            req.setStatus(FriendRequest.Status.PENDING); // was REJECTED
+            friendRepository.save(req);
+            pushService.sendToUser(them, "Iris", me + " wants to connect with you");
+            return ResponseEntity.ok(toDto(req));
+        }
+
+        // Fresh request.
+        FriendRequest req = friendRepository.save(new FriendRequest(me, them));
+        pushService.sendToUser(them, "Iris", me + " wants to connect with you");
         return ResponseEntity.ok(toDto(req));
     }
 

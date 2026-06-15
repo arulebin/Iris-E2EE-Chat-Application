@@ -1,6 +1,9 @@
 package com.iris.backend;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,16 +21,32 @@ import org.springframework.web.server.ResponseStatusException;
 public class UserController {
     
     private final UserRepository userRepository;
+    private final FriendRequestRepository friendRepository;
 
-    public UserController(UserRepository userRepository) {
+    public UserController(UserRepository userRepository, FriendRequestRepository friendRepository) {
         this.userRepository = userRepository;
+        this.friendRepository = friendRepository;
     }
 
     @GetMapping("/users")
     public List<UserProfileDto> getUsers(Authentication auth) {
         String me = auth.getName();
-        return userRepository.findUsersWithHistory(me).stream()
-                .filter(u -> !u.getUsername().equals(me))
+
+        // Contacts = people I've exchanged messages with, unioned with everyone
+        // I'm connected to (accepted requests) — so a brand-new friend with no
+        // messages yet still shows up in the list. Insertion order preserved.
+        Map<String, User> contacts = new LinkedHashMap<>();
+        for (User u : userRepository.findUsersWithHistory(me)) {
+            contacts.put(u.getUsername(), u);
+        }
+        for (FriendRequest fr : friendRepository.findAcceptedByUser(me)) {
+            String other = fr.getFromUser().equals(me) ? fr.getToUser() : fr.getFromUser();
+            contacts.computeIfAbsent(other, name -> userRepository.findByUsername(name).orElse(null));
+        }
+        contacts.remove(me);
+
+        return contacts.values().stream()
+                .filter(Objects::nonNull)
                 .map(UserProfileDto::from)
                 .toList();
     }
