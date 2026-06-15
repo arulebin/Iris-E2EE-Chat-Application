@@ -24,6 +24,11 @@ import { SettingsView } from "./components/SettingsView";
 import { IncomingCallModal } from "./components/IncomingCallModal";
 import { CallNoticeBanner } from "./components/CallNoticeBanner";
 import { VideoCallScreen } from "./components/VideoCallScreen";
+import { UnlockKeyView } from "./components/UnlockKeyView";
+
+// Shown in place of a message we can't open with the current key. Kept as a
+// constant so the cache layer can recognise (and refuse to persist) failures.
+const UNDECRYPTABLE = "🔒 Encrypted with a different key — can't be read on this device";
 
 function App() {
   // ── auth state ──────────────────────────────────────────────────
@@ -53,6 +58,11 @@ function App() {
   const [myPublicKey, setMyPublicKey] = useState<CryptoKey | null>(null);
   const [recipientPublicKey, setRecipientPublicKey] =
     useState<CryptoKey | null>(null);
+  // Set when the keypair can't be unlocked because no password is in memory
+  // (e.g. reopening the app on a persisted token with IndexedDB evicted), which
+  // routes the user to UnlockKeyView instead of a silently-broken session.
+  const [needsKeyPassword, setNeedsKeyPassword] = useState(false);
+  const [keyError, setKeyError] = useState<string | null>(null);
 
   // ── push / brave state ──────────────────────────────────────────
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -142,6 +152,8 @@ function App() {
     setPrivateKey(null);
     setMyPublicKey(null);
     setRecipientPublicKey(null);
+    setNeedsKeyPassword(false);
+    setKeyError(null);
     navigate("/");
     wsRef.current?.close();
   }
@@ -183,18 +195,34 @@ function App() {
     }
   }, [token]);
 
-  // password is read from closure; intentionally not in deps so the effect
-  // doesn't re-fire on every keystroke.
+  // `password` IS a dep: on a persisted-token boot it starts empty, and the
+  // UnlockKeyView sets it later — re-running this effect to unlock the key.
+  // Branch 1 (key already in IndexedDB) makes the common reload path a cheap no-op.
   useEffect(() => {
     if (!token || !me) return;
+    let cancelled = false;
     ensureKeyPair(me, password, token)
       .then(({ privateKey, publicKey }) => {
+        if (cancelled) return;
         setPrivateKey(privateKey);
         setMyPublicKey(publicKey);
+        setNeedsKeyPassword(false);
+        setKeyError(null);
       })
-      .catch((err) => console.error("Key setup failed:", err));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, me]);
+      .catch((err) => {
+        if (cancelled) return;
+        const message = String(err?.message ?? err);
+        const needsPassword = /Password required/.test(message); // IDB empty + no password yet
+        const wrongPassword = err?.name === "OperationError";    // backup wouldn't decrypt
+        if (needsPassword || wrongPassword) {
+          setNeedsKeyPassword(true);
+          setKeyError(wrongPassword ? "That password didn't unlock your messages. Try again." : null);
+        } else {
+          console.error("Key setup failed:", err);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [token, me, password]);
 
   useEffect(() => {
     if (!token) return;
@@ -272,7 +300,7 @@ function App() {
         return { ...msg, content: plaintext };
       } catch (err) {
         console.error("Decryption failed", err);
-        return { ...msg, content: "🔒 [unable to decrypt]" };
+        return { ...msg, content: UNDECRYPTABLE };
       }
     },
     [privateKey, me],
@@ -296,7 +324,11 @@ function App() {
       .then(async (history: ChatMessage[]) => {
         const decrypted = await Promise.all(history.map(decryptIncoming));
         setMessages(decrypted);
-        set(cacheKey, decrypted).catch(console.error);
+        // Don't poison the cache with decrypt failures — otherwise broken bubbles
+        // persist and reappear even after the key is fixed. Only cache clean decrypts.
+        if (!decrypted.some((m) => m.content === UNDECRYPTABLE)) {
+          set(cacheKey, decrypted).catch(console.error);
+        }
       })
       .catch(() => { /* serve via offline cache silently */ });
   }, [token, recipient, privateKey, decryptIncoming, me]);
@@ -346,7 +378,8 @@ function App() {
             const decrypted = await decryptIncomingRef.current(msg);
             setMessages((prev) => {
               const next = [...prev, decrypted];
-              if (currentMe && currentRecipient) {
+              // Skip caching if this message failed to decrypt (see history effect).
+              if (currentMe && currentRecipient && decrypted.content !== UNDECRYPTABLE) {
                 set(`chat_history_${currentMe}_${currentRecipient}`, next).catch(console.error);
               }
               return next;
@@ -761,6 +794,20 @@ function App() {
           setMode(next);
           setError(null);
         }}
+      />
+    );
+  }
+
+  // Logged in, but the private key couldn't be unlocked without a password
+  // (persisted token + evicted IndexedDB). Recover by re-entering it — this runs
+  // the password-derived restore and reuses the SAME key, never generates a new one.
+  if (needsKeyPassword) {
+    return (
+      <UnlockKeyView
+        me={me}
+        error={keyError}
+        onUnlock={(pw) => { setKeyError(null); setPassword(pw); }}
+        onLogout={handleLogout}
       />
     );
   }

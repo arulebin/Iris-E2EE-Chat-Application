@@ -95,6 +95,30 @@ type ServerKeys = {
 }
 
 /**
+ * Decrypt the server-stored, password-wrapped private key, cache both halves in
+ * IDB, and import them. Used by the normal restore branch AND by the conflict
+ * (409) path, so a second device always converges on the ONE server keypair.
+ * Throws OperationError if the password is wrong (AES-GCM auth failure).
+ */
+async function restoreFromBackup(
+  keys: ServerKeys,
+  password: string,
+  privDbKey: string,
+  pubDbKey: string,
+): Promise<{ privateKey: CryptoKey; publicKey: CryptoKey }> {
+  const salt = base64ToUint8(keys.keySalt!)
+  const kek = await deriveKek(password, salt)
+  const privateJwk = JSON.parse(await unwrapPrivateJwk(keys.encryptedPrivateKey!, kek)) as JsonWebKey
+  const publicJwk  = JSON.parse(keys.publicKey!) as JsonWebKey
+  await set(privDbKey, privateJwk)
+  await set(pubDbKey,  publicJwk)
+  return {
+    privateKey: await crypto.subtle.importKey('jwk', privateJwk, RSA_PARAMS, false, ['decrypt']),
+    publicKey:  await crypto.subtle.importKey('jwk', publicJwk,  RSA_PARAMS, false, ['encrypt']),
+  }
+}
+
+/**
  * Three-branch keypair recovery:
  *   1. IDB has both halves         → fast-path, no server / password needed.
  *   2. IDB empty, server has backup → derive KEK from password, decrypt privkey, save to IDB.
@@ -129,27 +153,18 @@ export async function ensureKeyPair(username: string, password: string, token: s
   if (!meRes.ok) throw new Error(`Failed to fetch own keys: ${meRes.status}`)
   const myKeys = await meRes.json() as ServerKeys
 
-  // Branch 2: server has a backup → unlock it
+  // Branch 2: server has a backup → unlock it (recovers the SAME key on every device)
   if (myKeys.publicKey && myKeys.encryptedPrivateKey && myKeys.keySalt) {
-    const salt = base64ToUint8(myKeys.keySalt)
-    const kek = await deriveKek(password, salt)
-    const privateJwkString = await unwrapPrivateJwk(myKeys.encryptedPrivateKey, kek)
-    const privateJwk = JSON.parse(privateJwkString) as JsonWebKey
-    const publicJwk  = JSON.parse(myKeys.publicKey)  as JsonWebKey
-    await set(privDbKey, privateJwk)
-    await set(pubDbKey,  publicJwk)
-    return {
-      privateKey: await crypto.subtle.importKey('jwk', privateJwk, RSA_PARAMS, false, ['decrypt']),
-      publicKey:  await crypto.subtle.importKey('jwk', publicJwk,  RSA_PARAMS, false, ['encrypt']),
-    }
+    return restoreFromBackup(myKeys, password, privDbKey, pubDbKey)
   }
 
-  // Branch 3: cold start — generate and back up
+  // Branch 3: cold start — generate, upload, and ONLY persist locally once the
+  // server has accepted. Writing IDB before the upload (the old behaviour) meant a
+  // failed POST left an un-backed-up local key that Branch 1 would then serve
+  // forever while the server stayed empty — the root cause of cross-device divergence.
   const pair = await crypto.subtle.generateKey(RSA_PARAMS, true, ['encrypt', 'decrypt']) as CryptoKeyPair
   const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey)
   const publicJwk  = await crypto.subtle.exportKey('jwk', pair.publicKey)
-  await set(privDbKey, privateJwk)
-  await set(pubDbKey,  publicJwk)
 
   const salt = crypto.getRandomValues(new Uint8Array(new ArrayBuffer(SALT_BYTES)))
   const kek = await deriveKek(password, salt)
@@ -164,8 +179,26 @@ export async function ensureKeyPair(username: string, password: string, token: s
       keySalt: uint8ToBase64(salt),
     }),
   })
+
+  // 409 = this account already published a key (another device, or a near-simultaneous
+  // race). Our freshly generated keypair is the wrong one — throw it away and recover
+  // the authoritative key from the server so BOTH devices end up on a single keypair.
+  if (res.status === 409) {
+    const recoverRes = await fetch(`${apiBase}/api/keys/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!recoverRes.ok) throw new Error(`Failed to recover keys after conflict: ${recoverRes.status}`)
+    const recovered = await recoverRes.json() as ServerKeys
+    if (!(recovered.publicKey && recovered.encryptedPrivateKey && recovered.keySalt)) {
+      throw new Error('Server reported a key conflict but has no recoverable backup')
+    }
+    return restoreFromBackup(recovered, password, privDbKey, pubDbKey)
+  }
   if (!res.ok) throw new Error(`Failed to upload keys: ${res.status}`)
 
+  // Server accepted — now it's safe to cache the keypair locally.
+  await set(privDbKey, privateJwk)
+  await set(pubDbKey,  publicJwk)
   return {
     privateKey: await crypto.subtle.importKey('jwk', privateJwk, RSA_PARAMS, false, ['decrypt']),
     publicKey:  await crypto.subtle.importKey('jwk', publicJwk,  RSA_PARAMS, false, ['encrypt']),
