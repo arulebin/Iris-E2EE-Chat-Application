@@ -39,6 +39,10 @@ export type ChatMessage = {
   senderDeviceId?: number | null;
   // Client-only: local id for a v2 message until the server assigns `id`.
   clientId?: string | null;
+  // Group messages: the group's id (history is filed under the pseudo-peer `group:<id>`).
+  groupId?: string | null;
+  // Client-only: a system line ("Alice added Bob") rather than a chat message.
+  system?: boolean;
 };
 
 export type CallMode = 'audio' | 'video';

@@ -3,8 +3,10 @@ package com.iris.backend;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Group management. Rules live in GroupService; this layer only maps requests and
@@ -27,6 +29,14 @@ public class GroupController {
     public record UpdateRequest(String name, String avatarUrl) { }
     public record MembersRequest(List<String> usernames) { }
     public record RoleRequest(String role) { }
+
+    // Spring's default error body omits the reason; the app shows it to the user
+    // ("You can only add people you're connected with: bob").
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, String>> rejected(ResponseStatusException e) {
+        return ResponseEntity.status(e.getStatusCode())
+            .body(Map.of("message", e.getReason() == null ? "Request failed" : e.getReason()));
+    }
 
     private GroupService.GroupDto announce(GroupService.Change change) {
         for (String u : change.audience()) chatHandler.notifyUser(u, "groups-changed");
