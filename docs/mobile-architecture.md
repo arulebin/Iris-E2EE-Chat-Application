@@ -210,3 +210,10 @@ Each phase ends with a shippable, reviewable state and explicit acceptance crite
 | Two Android apps share a backend and push project | Token/registration confusion | Distinct package id and FCM app registration per app |
 | Monorepo hoisting (React 19.2 vs 19.3) | Duplicate React, Metro errors | Keep frontend out until phase 2; per-workspace React resolution |
 | Windows path length / Gradle on JDK 26 | Build failures | Use Android Studio JBR (JDK 21); build from a short path in CI |
+
+## 7. Status and TODOs
+
+- `npx expo prebuild --platform android` succeeded (package `com.iris.chat.mobile`).
+- TODO: `./gradlew assembleDebug` in `mobile/android` was still running when this foundation was handed off (first run downloads NDK 27.1 and Android SDK Platform 37; build with Android Studio's JBR, JDK 21, because JDK 26 is unsupported; `local.properties` with `sdk.dir` is gitignored). Record the result here once finished.
+- TODO: run the Diagnostics screen on a device and record the PBKDF2 600k and safety-number timings (phase 1 gate).
+- TODO: `frontend/` joins the workspaces in phase 2.
