@@ -623,10 +623,20 @@ export function createMockServices(opts: MockOptions = {}): Services {
 
     backup: {
       status: () => wait({ ...backup }, latency / 2),
-      async setEnabled(v) {
-        backup = { ...backup, enabled: v }
+      async enable() {
+        backup = { ...backup, enabled: true }
         events.emit('backup')
         await wait(undefined, latency / 2)
+        return 'MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK'
+      },
+      async disable() {
+        backup = { enabled: false }
+        events.emit('backup')
+        await wait(undefined, latency / 2)
+      },
+      async restore() {
+        await wait(undefined, latency * 2)
+        return 0
       },
       async backupNow() {
         await wait(undefined, latency * 4)

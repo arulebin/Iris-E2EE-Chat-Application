@@ -6,11 +6,15 @@ import { Pressable, StyleSheet, View, type NativeScrollEvent, type NativeSynthet
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller'
 import Animated, { FadeIn, FadeOut, ZoomIn, ZoomOut } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { startCall } from '@/calls'
+import { openCamera, openDocumentPicker, openPicker } from '@/media'
 import { useChat, useContact, useMessages, useServices } from '@/state/hooks'
+import { peekRuntime } from '@/state/real'
 import type { Message, ReplyRef } from '@/state/services'
 import { Avatar } from '../components/Avatar'
 import { Badge } from '../components/Badge'
 import { IconButton } from '../components/Header'
+import { ListItem } from '../components/ListItem'
 import { Icon } from '../components/Icon'
 import { Sheet } from '../components/Sheet'
 import { Text } from '../components/Text'
@@ -47,6 +51,7 @@ export function Conversation({ chatId }: { chatId: string }) {
   const [reply, setReply] = useState<ReplyRef | null>(null)
   const [menu, setMenu] = useState<MenuTarget | null>(null)
   const [info, setInfo] = useState<Message | null>(null)
+  const [attachOpen, setAttachOpen] = useState(false)
   const topId = useRef<string | undefined>(undefined)
 
   const items = useMemo(() => buildTimeline(messages ?? [], { typing: chat?.typing }), [messages, chat?.typing])
@@ -60,6 +65,35 @@ export function Conversation({ chatId }: { chatId: string }) {
     if (topId.current && top.id !== topId.current && top.fromMe) list.current?.scrollToOffset({ offset: 0, animated: true })
     topId.current = top.id
   }, [messages])
+
+  // Tell the runtime which chat is on screen (read receipts on arrival, server metadata refresh).
+  useEffect(() => {
+    peekRuntime()?.setOpenChat(chatId)
+    return () => peekRuntime()?.setOpenChat(null)
+  }, [chatId])
+
+  const attach = useCallback(
+    (kind: 'gallery' | 'camera' | 'document') => {
+      setAttachOpen(false)
+      // System pickers / camera leave the app briefly: do not let that trip the app lock.
+      peekRuntime()?.suppressLock()
+      const opts = { allowViewOnce: !group }
+      if (kind === 'gallery') openPicker(chatId, opts)
+      else if (kind === 'camera') openCamera(chatId, opts)
+      else openDocumentPicker(chatId, opts).catch(() => toast.show('Could not open files', 'error'))
+    },
+    [chatId, group, toast],
+  )
+
+  const call = useCallback(
+    (mode: 'audio' | 'video') => {
+      if (!chat?.peerId) return
+      haptic.tap()
+      peekRuntime()?.suppressLock(30_000) // mic / camera permission dialogs
+      startCall(chat.peerId, mode).catch((e: unknown) => toast.show((e as Error)?.message || 'Could not start the call', 'error'))
+    },
+    [chat?.peerId, toast],
+  )
 
   // Mark read while the conversation is open and the user is at the bottom.
   useEffect(() => {
@@ -180,8 +214,12 @@ export function Conversation({ chatId }: { chatId: string }) {
               onPress={() => router.push({ pathname: '/safety/[id]', params: { id: chat.peerId! } })}
             />
           ) : null}
-          <IconButton name="videocam-outline" label="Video call" onPress={() => toast.show('Calls are coming soon')} />
-          <IconButton name="call-outline" label="Voice call" onPress={() => toast.show('Calls are coming soon')} />
+          {!group && chat?.peerId ? (
+            <>
+              <IconButton name="videocam-outline" label="Video call" onPress={() => call('video')} />
+              <IconButton name="call-outline" label="Voice call" onPress={() => call('audio')} />
+            </>
+          ) : null}
         </View>
       </View>
 
@@ -235,10 +273,18 @@ export function Conversation({ chatId }: { chatId: string }) {
             </Animated.View>
           )}
         </View>
-        <Composer reply={reply} onCancelReply={() => setReply(null)} onSend={send} onTyping={v => services.chats.setTyping(chatId, v)} placeholder={group ? 'Message the group' : 'Message'} />
+        <Composer reply={reply} onCancelReply={() => setReply(null)} onSend={send} onTyping={v => services.chats.setTyping(chatId, v)} onAttach={() => setAttachOpen(true)} placeholder={group ? 'Message the group' : 'Message'} />
       </KeyboardAvoidingView>
 
       <MessageContextMenu target={menu} onClose={() => setMenu(null)} onAction={onAction} />
+
+      <Sheet visible={attachOpen} onClose={() => setAttachOpen(false)} title="Send">
+        <View style={{ paddingBottom: insets.bottom + 8 }}>
+          <ListItem icon="images" title="Photos & videos" onPress={() => attach('gallery')} />
+          <ListItem icon="camera" title="Camera" onPress={() => attach('camera')} />
+          <ListItem icon="document" title="Document" onPress={() => attach('document')} />
+        </View>
+      </Sheet>
 
       <Sheet visible={!!info} onClose={() => setInfo(null)} title="Message info">
         {info ? (

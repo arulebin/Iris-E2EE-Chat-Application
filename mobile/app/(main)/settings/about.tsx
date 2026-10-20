@@ -2,6 +2,7 @@ import Constants from 'expo-constants'
 import { useRouter } from 'expo-router'
 import { Linking, View } from 'react-native'
 import { IrisMark } from '@/components/IrisMark'
+import { UpdateInfoCard } from '@/updates'
 import { ListItem, Section } from '@/ui/components/ListItem'
 import { Page } from '@/ui/components/Page'
 import { Text } from '@/ui/components/Text'
@@ -24,6 +25,9 @@ export default function About() {
         <Text variant="small" tone="muted" align="center" style={{ marginTop: 10 }}>
           This program comes with ABSOLUTELY NO WARRANTY. See the GNU GPL v3 for details.
         </Text>
+      </View>
+      <View style={{ paddingHorizontal: 20, paddingTop: 20 }}>
+        <UpdateInfoCard />
       </View>
       <Section>
         <ListItem icon="document-text" title="GNU GPL v3 license" chevron onPress={() => Linking.openURL('https://www.gnu.org/licenses/gpl-3.0.html')} />

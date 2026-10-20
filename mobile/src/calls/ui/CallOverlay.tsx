@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import Animated, { FadeIn, FadeInUp, FadeOut } from 'react-native-reanimated'
-import { GestureHandlerRootView } from 'react-native-gesture-handler'
-import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { IrisCalls } from '../../../modules/iris-calls'
 import { subscribePip } from '../bindings'
 import type { CallSnapshot } from '../engine'
@@ -56,8 +55,10 @@ function ConfiguredOverlay({ profileOf, onQuickReply }: CallOverlayProps) {
   const showSummary = state.kind === 'idle' && call.summary && summaryWorthShowing(call.summary)
 
   return (
-    <SafeAreaProvider>
-      <GestureHandlerRootView style={StyleSheet.absoluteFill} pointerEvents="box-none">
+    <>
+      {/* Plain box-none View only: a nested GestureHandlerRootView / SafeAreaProvider swallows every touch
+          on Android even when idle. The app root provides both, and the overlay must sit inside them. */}
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
         {state.kind === 'incoming' && (
           <IncomingScreen
             name={name}
@@ -93,8 +94,8 @@ function ConfiguredOverlay({ profileOf, onQuickReply }: CallOverlayProps) {
         )}
 
         {call.notice && <NoticeBanner message={call.notice} onDismiss={engine.dismissNotice.bind(engine)} />}
-      </GestureHandlerRootView>
-    </SafeAreaProvider>
+      </View>
+    </>
   )
 }
 

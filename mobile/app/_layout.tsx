@@ -4,20 +4,24 @@ import { PlusJakartaSans_600SemiBold } from '@expo-google-fonts/plus-jakarta-san
 import { PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans/700Bold'
 import { PlusJakartaSans_800ExtraBold } from '@expo-google-fonts/plus-jakarta-sans/800ExtraBold'
 import { useFonts } from 'expo-font'
-import { Stack } from 'expo-router'
+import { Stack, useRouter, useSegments } from 'expo-router'
 import * as SplashScreen from 'expo-splash-screen'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect, type ReactNode } from 'react'
+import { StyleSheet, View } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { KeyboardProvider } from 'react-native-keyboard-controller'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
-import { ServicesProvider, useSession, useSettings } from '@/state/hooks'
+import { CallOverlay } from '@/calls'
+import { ServicesProvider, useServices, useSession, useSettings } from '@/state/hooks'
+import { peekRuntime } from '@/state/real'
 import { setHapticsEnabled } from '@/ui/lib/haptics'
 import { ToastProvider } from '@/ui/components/Toast'
 import { ThemeProvider, useTheme } from '@/ui/theme'
 
-SplashScreen.preventAutoHideAsync().catch(() => {})
 import { UpdateBanner } from '@/updates'
+
+SplashScreen.preventAutoHideAsync().catch(() => {})
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
@@ -53,14 +57,29 @@ function Themed({ children }: { children: ReactNode }) {
 function Navigator() {
   const t = useTheme()
   const session = useSession()
+  const services = useServices()
+  const router = useRouter()
+  const segments = useSegments()
 
   useEffect(() => {
     if (session !== undefined) SplashScreen.hideAsync().catch(() => {})
   }, [session])
 
-  if (session === undefined) return null
   const signedOut = session === null
   const locked = !!session?.locked
+
+  // Protected groups hide screens but do not move the user: send them to the side they belong on
+  // (cold start at "/" while signed out has no matching screen otherwise).
+  const inAuth = segments[0] === '(auth)'
+  const atUnlock = segments[0] === 'unlock'
+  useEffect(() => {
+    if (session === undefined) return
+    if (signedOut && !inAuth) router.replace('/welcome')
+    else if (!signedOut && locked && !atUnlock) router.replace('/unlock')
+    else if (!signedOut && !locked && (inAuth || atUnlock)) router.replace('/')
+  }, [session, signedOut, locked, inAuth, atUnlock, router])
+
+  if (session === undefined) return null
 
   return (
     <>
@@ -83,6 +102,16 @@ function Navigator() {
         </Stack.Protected>
         <Stack.Screen name="diagnostics" />
       </Stack>
+      <UpdateBanner />
+      {!signedOut ? (
+        // Above the navigator, out of the layout flow; touch-transparent until a call UI is shown.
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <CallOverlay
+            profileOf={u => ({ name: peekRuntime()?.nameOf(u) ?? u })}
+            onQuickReply={(peer, text) => void services.chats.send(peer, text).catch(() => {})}
+          />
+        </View>
+      ) : null}
     </>
   )
 }

@@ -273,7 +273,7 @@ describe('createPush', () => {
     const push = createPush({ notifications: n, importance: { HIGH: 4, MAX: 5 }, fetch, kv: new MemoryKV() })
     expect(await push.enable()).toBe('fcm-token-1')
     expect(n.channels).toEqual(['messages', 'calls'])
-    expect(calls[0]).toEqual({ path: '/api/push/fcm-token', method: 'POST', body: '{"token":"fcm-token-1"}' })
+    expect(calls[0]).toEqual({ path: '/api/push/fcm-token', method: 'POST', body: '{"token":"fcm-token-1","app":"com.iris.chat.mobile"}' })
     expect(await push.isRegistered()).toBe(true)
     await push.disable()
     expect(calls[1]).toMatchObject({ method: 'DELETE', body: '{"token":"fcm-token-1"}' })

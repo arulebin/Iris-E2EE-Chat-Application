@@ -1,12 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { AppSettings, Services, Session, Topic } from './services'
 import { createMockServices } from './mock'
+import { createRealServices } from './real'
+
+/** Dev builds can run the UI on in-memory data with EXPO_PUBLIC_MOCK=1; everything else uses the real stack. */
+export const USE_MOCK = process.env.EXPO_PUBLIC_MOCK === '1'
 
 const ServicesContext = createContext<Services | null>(null)
 
 /** Swap `services` for the real implementation when it exists; screens do not change. */
 export function ServicesProvider({ services, children }: { services?: Services; children: ReactNode }) {
-  const value = useMemo(() => services ?? createMockServices(), [services])
+  const value = useMemo(() => services ?? (USE_MOCK ? createMockServices() : createRealServices()), [services])
   return <ServicesContext.Provider value={value}>{children}</ServicesContext.Provider>
 }
 
@@ -88,7 +92,7 @@ export const useContact = (id: string | undefined) =>
 const DEFAULT_SETTINGS: AppSettings = { theme: 'system', screenSecurity: false, appLock: false, haptics: true, notifications: true }
 
 /** Settings with an optimistic setter. Always returns a value (defaults until loaded). */
-export function useSettings(): { settings: AppSettings; update: (patch: Partial<AppSettings>) => void; ready: boolean } {
+export function useSettings(): { settings: AppSettings; update: (patch: Partial<AppSettings>) => Promise<Error | null>; ready: boolean } {
   const services = useServices()
   const q = useQuery(s => s.settings.get(), ['settings'])
   const [local, setLocal] = useState<Partial<AppSettings>>({})
@@ -96,7 +100,13 @@ export function useSettings(): { settings: AppSettings; update: (patch: Partial<
   const update = useCallback(
     (patch: Partial<AppSettings>) => {
       setLocal(p => ({ ...p, ...patch }))
-      services.settings.update(patch).catch(() => setLocal({}))
+      return services.settings.update(patch).then(
+        () => null,
+        (e: unknown) => {
+          setLocal({})
+          return e instanceof Error ? e : new Error(String(e))
+        },
+      )
     },
     [services],
   )

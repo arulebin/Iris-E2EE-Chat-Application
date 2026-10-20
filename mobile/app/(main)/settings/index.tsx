@@ -53,8 +53,8 @@ export default function Settings() {
           subtitle="Hide content in app switcher, block screenshots"
           value={settings.screenSecurity}
           onValueChange={v => {
-            update({ screenSecurity: v })
-            toast.show('Screen security applies once the native adapter is installed')
+            void update({ screenSecurity: v })
+            if (!v) toast.show('Screenshots allowed. View-once media and calls stay protected.')
           }}
         />
         <ListItem icon="phone-portrait" title="Linked devices" chevron onPress={() => router.push('/settings/devices')} />

@@ -21,7 +21,8 @@ export * from './screenSecurity'
 export * from './tokenStore'
 export * from './transport'
 
-export const API_BASE_URL = 'https://129-225-92-235.sslip.io'
+/** Production API; dev builds point elsewhere with EXPO_PUBLIC_API_BASE (e.g. http://localhost:8080 over `adb reverse`). */
+export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE || 'https://129-225-92-235.sslip.io'
 
 const mmkvFactory: MmkvFactory = cfg => createMMKV(cfg) as never
 
@@ -52,7 +53,7 @@ export async function createPlatform(opts: {
   const alias = opts.alias ?? 'default'
   const keyWrapper = createKeystoreWrapper(alias, IrisKeystore)
   const appLock = createAppLockWrapper(alias, IrisKeystore)
-  const kv = await openEncryptedKV({ wrapper: keyWrapper, crypto: nativeCryptoProvider(), createMmkv: mmkvFactory })
+  const kv = await openEncryptedKV({ wrapper: keyWrapper, crypto: nativeCryptoProvider(), createMmkv: mmkvFactory, id: `iris-secure-${alias}`, bootId: `iris-secure-${alias}-boot` })
   const tokens = createWrappedTokenStore(kv, keyWrapper)
   const transport = createRnTransport({
     baseUrl: opts.baseUrl ?? API_BASE_URL,

@@ -24,7 +24,9 @@ export type RnTransportOptions = {
   wsPath?: string
 }
 
-export type RnTransport = Transport & {
+export type RnTransport = Omit<Transport, 'connect'> & {
+  /** Opens the realtime channel (25 s ping, backoff, wake on foreground / network back). */
+  connect(handlers: SocketHandlers): SocketHandle & { readonly isOpen: boolean }
   /** fetch() with bearer token + single-flight refresh, for callers that need a raw Response. */
   fetch: ReturnType<typeof createAuthedFetch>
 }
@@ -63,7 +65,7 @@ export function createRnTransport(opts: RnTransportOptions): RnTransport {
       return { status: res.status, ok: res.ok, data: data as T }
     },
 
-    connect(handlers: SocketHandlers): SocketHandle {
+    connect(handlers: SocketHandlers): SocketHandle & { readonly isOpen: boolean } {
       const rt = createRealtime(
         {
           WebSocketImpl: opts.WebSocketImpl ?? (WebSocket as unknown as WebSocketCtor),
@@ -89,6 +91,9 @@ export function createRnTransport(opts: RnTransportOptions): RnTransport {
       const offFg = opts.lifecycle.onForeground(() => rt.wake())
       const offNet = opts.lifecycle.onOnline(() => rt.wake())
       return {
+        get isOpen() {
+          return rt.isOpen
+        },
         send: f => rt.send(f),
         close() {
           offFg()

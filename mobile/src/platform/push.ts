@@ -12,6 +12,8 @@ export interface NotificationsLike {
 type Fetcher = (path: string, init?: RequestInit) => Promise<Response>
 
 const TOKEN_KEY = 'push.fcm-token'
+/** Lets the backend send this app data-only call pushes (legacy clients omit it and get notifications). */
+export const APP_ID = 'com.iris.chat.mobile'
 
 // Channel ids must match what the backend puts in AndroidNotification.channelId.
 export async function ensureChannels(n: NotificationsLike, importance: { HIGH: number; MAX: number }) {
@@ -48,7 +50,7 @@ export function createPush(deps: {
     const res = await deps.fetch('/api/push/fcm-token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      body: JSON.stringify({ token, app: APP_ID }),
     })
     if (!res.ok) throw new Error('Failed to register device for notifications')
     await deps.kv.set(TOKEN_KEY, token)

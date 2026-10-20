@@ -1,9 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { StyleSheet, View } from 'react-native'
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller'
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated'
 import { IrisMark } from '@/components/IrisMark'
-import { useServices, useSession } from '@/state/hooks'
+import { useServices, useSession, useSettings } from '@/state/hooks'
 import { Button } from '@/ui/components/Button'
 import { Field } from '@/ui/components/Field'
 import { Screen } from '@/ui/components/Screen'
@@ -22,6 +22,30 @@ export default function Unlock() {
   const [error, setError] = useState<string | null>(null)
   const shake = useSharedValue(0)
   const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }))
+  const { settings } = useSettings()
+  const canBio = settings.appLock && !!auth.unlockWithBiometrics
+  const prompted = useRef(false)
+
+  async function bio() {
+    if (!auth.unlockWithBiometrics || busy) return
+    try {
+      await auth.unlockWithBiometrics()
+      haptic.success()
+    } catch (e) {
+      // Cancelled prompt, or the keys need the password (new device / revoked): fall back to the field.
+      const msg = (e as Error)?.message ?? ''
+      if (msg && !/cancel/i.test(msg)) toast.show(msg, 'info')
+    }
+  }
+
+  // Offer the system prompt straight away when app lock is on.
+  useEffect(() => {
+    if (canBio && !prompted.current) {
+      prompted.current = true
+      void bio()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canBio])
 
   async function submit() {
     if (!password || busy) return
@@ -65,7 +89,7 @@ export default function Unlock() {
         </Animated.View>
         <View style={{ gap: 12 }}>
           <Button title="Unlock" onPress={submit} loading={busy} disabled={!password} />
-          <Button title="Use biometrics" variant="secondary" icon="finger-print" onPress={() => toast.show('Biometric unlock arrives with the app lock track', 'info')} />
+          {canBio ? <Button title="Use biometrics or screen lock" variant="secondary" icon="finger-print" onPress={bio} /> : null}
         </View>
       </KeyboardAwareScrollView>
     </Screen>

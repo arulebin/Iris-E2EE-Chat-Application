@@ -110,7 +110,8 @@
         }
       ],
       "@config-plugins/react-native-webrtc",
-      "./modules/iris-calls/plugin"
+      "./modules/iris-calls/plugin",
+      "./plugins/withDevNetworkSecurity"
     ],
     "experiments": {
       "typedRoutes": true

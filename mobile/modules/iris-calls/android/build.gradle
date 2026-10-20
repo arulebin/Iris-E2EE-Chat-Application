@@ -16,4 +16,14 @@ android {
 
 dependencies {
   implementation "androidx.core:core-ktx:1.13.1"
+  // IrisFirebaseMessagingService extends Expo's FCM service. The app already ships expo-notifications (and with
+  // it firebase-messaging), so compile against them only. Expo publishes it precompiled (local maven repo);
+  // fall back to the source project when it is built from source.
+  def notifications = rootProject.findProject(':expo-notifications')
+  if (notifications != null) {
+    compileOnly notifications
+  } else {
+    compileOnly 'host.exp.exponent:expo.modules.notifications:+'
+  }
+  compileOnly 'com.google.firebase:firebase-messaging:25.0.1'
 }

@@ -2,6 +2,8 @@ import { memo, useRef, type ComponentRef } from 'react'
 import { Pressable, StyleSheet, View } from 'react-native'
 import ReanimatedSwipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable'
 import Animated, { Extrapolation, interpolate, runOnJS, useAnimatedReaction, useAnimatedStyle, type SharedValue } from 'react-native-reanimated'
+import { MediaBubble } from '@/media'
+import { peekRuntime } from '@/state/real'
 import type { Message } from '@/state/services'
 import { haptic } from '../../lib/haptics'
 import { clockTime } from '../../lib/timeline'
@@ -55,10 +57,24 @@ export function BubbleBody({ message, first, last, group }: BodyProps) {
           </Text>
         </View>
       ) : null}
+      {message.media ? (
+        <MediaBubble
+          messageKey={message.id}
+          mediaId={message.media.mediaId}
+          envelope={{ iris: 'media', v: 1, key: message.media.key, mime: message.media.mime, caption: message.media.caption, name: message.media.name, size: message.media.size, w: message.media.w, h: message.media.h, dur: message.media.dur, bh: message.media.bh }}
+          viewOnce={message.media.viewOnce}
+          mine={mine}
+          pending={message.media.pending}
+          onViewed={() => void peekRuntime()?.markViewed(message.chatId, message.id)}
+          style={{ marginBottom: 2 }}
+        />
+      ) : null}
       <View style={styles.content}>
-        <Text color={ink} style={styles.text}>
-          {message.text}
-        </Text>
+        {message.media ? null : (
+          <Text color={ink} style={styles.text}>
+            {message.text}
+          </Text>
+        )}
         <View style={styles.meta}>
           <Text variant="caption" color={muted} style={{ fontSize: 11 }}>
             {clockTime(message.at)}

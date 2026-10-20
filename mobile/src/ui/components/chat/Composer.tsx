@@ -15,11 +15,13 @@ interface Props {
   onCancelReply: () => void
   onSend: (text: string) => void
   onTyping: (typing: boolean) => void
+  /** Attach button; without it the button shows a "coming soon" toast. */
+  onAttach?: () => void
   placeholder?: string
 }
 
 /** Message composer: auto-growing input, reply preview, attach/emoji placeholders, mic -> send morph. */
-export function Composer({ reply, onCancelReply, onSend, onTyping, placeholder = 'Message' }: Props) {
+export function Composer({ reply, onCancelReply, onSend, onTyping, onAttach, placeholder = 'Message' }: Props) {
   const t = useTheme()
   const insets = useSafeAreaInsets()
   const toast = useToast()
@@ -101,7 +103,7 @@ export function Composer({ reply, onCancelReply, onSend, onTyping, placeholder =
             textAlignVertical="center"
             scrollEnabled
           />
-          <Pressable onPress={() => toast.show('Attachments arrive with the media update')} hitSlop={8} accessibilityRole="button" accessibilityLabel="Attach" style={styles.fieldIcon}>
+          <Pressable onPress={() => (onAttach ? onAttach() : toast.show('Attachments are not available here'))} hitSlop={8} accessibilityRole="button" accessibilityLabel="Attach" style={styles.fieldIcon}>
             <Icon name="attach" size={24} color={t.muted} />
           </Pressable>
         </View>

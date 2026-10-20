@@ -56,6 +56,27 @@ export interface Message {
   at: number
   status: MessageStatus
   replyTo?: ReplyRef
+  /** Present for photo / video / document messages (`text` then holds the caption). */
+  media?: MessageMedia
+}
+
+export interface MessageMedia {
+  mediaId: string
+  /** base64 AES key from the decrypted envelope. */
+  key: string
+  mime: string
+  caption: string
+  name?: string
+  size?: number
+  w?: number
+  h?: number
+  dur?: number
+  bh?: string
+  viewOnce: boolean
+  /** View-once consumed (by the recipient, or locally). */
+  viewed: boolean
+  /** Sender side, while uploading: the live job (see media/session.ts). */
+  pending?: import('@/media').OutgoingMedia
 }
 
 export type ChatKind = 'direct' | 'group'
@@ -117,6 +138,8 @@ export interface BackupStatus {
   enabled: boolean
   lastBackupAt?: number
   sizeBytes?: number
+  /** A backup exists on the server (this account), whether or not this device keeps it up to date. */
+  serverBackup?: boolean
 }
 
 export interface DeviceInfo {
@@ -150,6 +173,8 @@ export interface AuthService {
   lock(): Promise<void>
   /** Throws AuthError('bad-password') on mismatch. */
   unlock(password: string): Promise<Session>
+  /** System biometric / screen-lock prompt (app lock). Optional: the mock has none. */
+  unlockWithBiometrics?(): Promise<Session>
 }
 
 export interface ContactsService {
@@ -210,8 +235,12 @@ export interface SafetyService {
 
 export interface BackupService {
   status(): Promise<BackupStatus>
-  setEnabled(value: boolean): Promise<void>
+  /** Turn backups on. Resolves the recovery key (shown to the user exactly once). */
+  enable(): Promise<string>
+  disable(): Promise<void>
   backupNow(): Promise<BackupStatus>
+  /** Restore this account's server backup with the recovery key. Resolves the number of messages restored. */
+  restore(recoveryKey: string): Promise<number>
 }
 
 export interface DevicesService {
