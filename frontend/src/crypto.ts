@@ -56,6 +56,19 @@ export type Credentials = {
   master: CryptoKey   // non-extractable HKDF key; never leaves the browser
 }
 
+// Which authSalt each master secret was derived with (needed to tag local escrow blobs).
+const masterSalts = new WeakMap<CryptoKey, string>()
+export const saltOfMaster = (master: CryptoKey): string | null => masterSalts.get(master) ?? null
+
+const authSaltCacheKey = (username: string) => `iris-authsalt:${username}`
+/** The account's authSalt as last seen on this device (not secret); lets the password unlock local data offline. */
+export function cachedAuthSalt(username: string): string | null {
+  try { return localStorage.getItem(authSaltCacheKey(username)) } catch { return null }
+}
+export function cacheAuthSalt(username: string, authSalt: string): void {
+  try { localStorage.setItem(authSaltCacheKey(username), authSalt) } catch { /* ignore */ }
+}
+
 export function newSalt(): string {
   return uint8ToBase64(crypto.getRandomValues(new Uint8Array(SALT_BYTES)))
 }
@@ -74,6 +87,7 @@ export async function deriveCredentials(password: string, authSaltB64: string): 
     256
   )
   const master = await crypto.subtle.importKey('raw', masterBits, 'HKDF', false, ['deriveBits', 'deriveKey'])
+  masterSalts.set(master, authSaltB64)
   const authBits = await crypto.subtle.deriveBits(
     { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: AUTH_INFO },
     master,
@@ -309,6 +323,7 @@ export async function fetchAuthSalt(username: string): Promise<AuthSaltInfo> {
     throw new Error("The server asked for this account's legacy password login, which this device already upgraded. Refusing to send your password.")
   }
   if (info.version >= 2 && !info.authSalt) throw new Error('Server returned no salt for this account')
+  if (info.version >= 2 && info.authSalt) cacheAuthSalt(username, info.authSalt)
   return info
 }
 
@@ -377,6 +392,7 @@ export async function upgradeLegacyAccount(username: string, password: string, t
   } catch { /* no body: keep the current session */ }
 
   markUpgraded(username)
+  cacheAuthSalt(username, authSalt)
   return master
 }
 
