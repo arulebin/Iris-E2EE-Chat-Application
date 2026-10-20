@@ -11,7 +11,11 @@
     "backgroundColor": "#f7f8fb",
     "ios": {
       "bundleIdentifier": "com.iris.chat.mobile",
-      "supportsTablet": false
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Iris uses the camera to take photos and videos you send in chats.",
+        "NSMicrophoneUsageDescription": "Iris uses the microphone to record sound in videos you send."
+      }
     },
     "android": {
       "package": "com.iris.chat.mobile",
@@ -21,7 +25,8 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": true
+      "predictiveBackGestureEnabled": true,
+      "permissions": ["android.permission.CAMERA", "android.permission.RECORD_AUDIO"]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -43,7 +48,20 @@
           }
         }
       ],
-      "react-native-quick-crypto"
+      "react-native-quick-crypto",
+      "expo-video",
+      "expo-image",
+      "react-native-compressor",
+      "expo-sharing",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Iris needs access to your photos so you can choose what to send.",
+          "savePhotosPermission": "Iris saves photos and videos to your library only when you tap Save.",
+          "granularPermissions": ["photo", "video"],
+          "isAccessMediaLocationEnabled": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
