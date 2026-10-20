@@ -1,5 +1,4 @@
 import { get, set } from 'idb-keyval'
-import { FingerprintGenerator } from '@privacyresearch/libsignal-protocol-typescript'
 import { apiBase } from './config'
 import { verifyLegacySignature } from '../crypto'
 import { signalApi } from './signal/api'
@@ -76,6 +75,40 @@ async function partyDigits(username: string, jwk: JsonWebKey): Promise<string> {
     digits += String(chunk % 100000).padStart(5, '0')
   }
   return digits
+}
+
+/**
+ * Signal's fingerprint (version 0) for one identity: SHA-512 over
+ * (version ‖ key ‖ identifier), then `iterations` rounds of SHA-512(prev ‖ key),
+ * 30 digits from the first 30 bytes. Same output as the library's
+ * FingerprintGenerator, but on WebCrypto — the library hashes through a pure-JS
+ * SHA-512 that takes minutes for 2 × 5200 rounds in the browser.
+ */
+async function identityDigits(identifier: string, identityKey: ArrayBuffer, iterations: number): Promise<string> {
+  const key = new Uint8Array(identityKey)
+  let hash = concat(new Uint8Array(new Uint16Array([SAFETY_VERSION]).buffer), key, new TextEncoder().encode(identifier))
+  for (let i = 0; i < iterations; i++) {
+    hash = new Uint8Array(await crypto.subtle.digest('SHA-512', concat(hash, key)))
+  }
+  let digits = ''
+  for (let i = 0; i < 30; i += 5) {
+    let chunk = 0
+    for (let j = 0; j < 5; j++) chunk = chunk * 256 + hash[i + j]
+    digits += String(chunk % 100000).padStart(5, '0')
+  }
+  return digits
+}
+
+/** 60-digit safety number from two Signal identity keys (halves sorted, as Signal does). */
+export async function identitySafetyNumber(
+  localId: string, localKey: ArrayBuffer, remoteId: string, remoteKey: ArrayBuffer,
+  iterations = SAFETY_ITERATIONS,
+): Promise<string> {
+  const halves = await Promise.all([
+    identityDigits(localId, localKey, iterations),
+    identityDigits(remoteId, remoteKey, iterations),
+  ])
+  return halves.sort().join('')
 }
 
 /**
@@ -338,7 +371,7 @@ export async function loadSafetyNumber(me: string, peer: string, token: string):
   ])
   if (mine && theirs) {
     const peerKey = ab(theirs.identityKey)
-    const digits = await new FingerprintGenerator(SAFETY_ITERATIONS).createFor(me, mine.pubKey, peer, peerKey)
+    const digits = await identitySafetyNumber(me, mine.pubKey, peer, peerKey)
     return { digits, peerFingerprint: await identityFingerprint(peerKey), qrValue: `iris-safety:v2:${digits}` }
   }
   const [myJwk, peerJwk] = await Promise.all([loadOwnPublicJwk(me, token), fetchPublicJwk(peer, token)])
