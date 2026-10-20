@@ -151,7 +151,10 @@ export function Conversation({ chatId }: { chatId: string }) {
 
   const send = useCallback(
     (text: string) => {
-      services.chats.send(chatId, text, reply?.id).catch(() => toast.show('Could not send message', 'error'))
+      services.chats.send(chatId, text, reply?.id).catch((e: unknown) => {
+        const msg = e instanceof Error && e.message.trim() ? e.message.trim() : ''
+        toast.show(msg || 'Could not send message', 'error')
+      })
       setReply(null)
     },
     [chatId, reply, services, toast],
