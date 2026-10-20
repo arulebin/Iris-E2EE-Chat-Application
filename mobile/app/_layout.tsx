@@ -17,6 +17,7 @@ import { ToastProvider } from '@/ui/components/Toast'
 import { ThemeProvider, useTheme } from '@/ui/theme'
 
 SplashScreen.preventAutoHideAsync().catch(() => {})
+import { UpdateBanner } from '@/updates'
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({

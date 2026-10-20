@@ -32,5 +32,13 @@
 		max_size 52MB
 	}
 
-	reverse_proxy backend:8080
+	# OTA update server (optional "updates" compose profile; 502 here if it isn't
+	# running, which the app treats as "no update"). Serves only pre-signed artifacts.
+	handle_path /updates/* {
+		reverse_proxy updates:8081
+	}
+
+	handle {
+		reverse_proxy backend:8080
+	}
 }

@@ -29,3 +29,11 @@ local.properties
 mobile/google-services.json
 mobile/modules/*/android/build/
 mobile/modules/*/android/.cxx/
+
+# OTA code-signing PRIVATE keys and local publish output - never commit
+.ota-dev/
+.ota-keys/
+**/private-key.pem
+*.private.pem
+*-private-key.pem
+ota-out/

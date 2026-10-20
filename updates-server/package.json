@@ -1,0 +1,12 @@
+{
+  "name": "@iris/updates-server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "description": "Dependency-free Expo Updates protocol v1 server for Iris OTA. Holds no signing key.",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test \"test/*.test.mjs\" \"../scripts/test/*.test.mjs\""
+  }
+}
