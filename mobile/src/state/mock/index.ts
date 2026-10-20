@@ -275,7 +275,7 @@ export function createMockServices(opts: MockOptions = {}): Services {
     { id: 'd2', name: 'Chrome on Windows', platform: 'web', lastActive: t0 - 2 * HOUR, current: false },
     { id: 'd3', name: 'iPad', platform: 'ios', lastActive: t0 - 6 * DAY, current: false },
   ]
-  let settings: AppSettings = { theme: 'system', screenSecurity: false, appLock: false, haptics: true, notifications: true }
+  let settings: AppSettings = { theme: 'system', screenSecurity: false, appLock: false, haptics: true, notifications: true, messagePreview: true }
 
   const rec = (id: string) => {
     const r = chats.get(id)

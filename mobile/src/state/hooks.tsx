@@ -89,7 +89,7 @@ export const useDevices = () => useQuery(s => s.devices.list(), ['devices'])
 export const useContact = (id: string | undefined) =>
   useQuery(async s => (id ? s.contacts.get(id) : null), ['contacts'], [id])
 
-const DEFAULT_SETTINGS: AppSettings = { theme: 'system', screenSecurity: false, appLock: false, haptics: true, notifications: true }
+const DEFAULT_SETTINGS: AppSettings = { theme: 'system', screenSecurity: false, appLock: false, haptics: true, notifications: true, messagePreview: true }
 
 /** Settings with an optimistic setter. Always returns a value (defaults until loaded). */
 export function useSettings(): { settings: AppSettings; update: (patch: Partial<AppSettings>) => Promise<Error | null>; ready: boolean } {

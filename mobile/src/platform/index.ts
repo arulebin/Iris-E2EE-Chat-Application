@@ -5,6 +5,7 @@ import { AppState } from 'react-native'
 import { createMMKV } from 'react-native-mmkv'
 import { type KeyWrapper, type KV, type TokenStore } from '@iris/core'
 import { IrisKeystore } from '../../modules/iris-keystore/src'
+import { IrisNotify } from '../notify/native'
 import { nativeCryptoProvider } from '../crypto/provider'
 import { createAppLockWrapper, createKeystoreWrapper } from './keystore'
 import { openEncryptedKV, type MmkvFactory } from './kv'
@@ -71,6 +72,8 @@ export async function createPlatform(opts: {
     fetch: transport.fetch,
     kv,
     isDevice: Device.isDevice,
+    getDeviceId: opts.getDeviceId,
+    dataPush: IrisNotify != null,
   })
   return { kv, keyWrapper, appLock, tokens, transport, push }
 }

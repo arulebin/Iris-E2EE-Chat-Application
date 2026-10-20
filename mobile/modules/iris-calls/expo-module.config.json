@@ -1,6 +1,6 @@
 {
   "platforms": ["android"],
   "android": {
-    "modules": ["com.iris.calls.IrisCallsModule"]
+    "modules": ["com.iris.calls.IrisCallsModule", "com.iris.notify.IrisNotifyModule"]
   }
 }

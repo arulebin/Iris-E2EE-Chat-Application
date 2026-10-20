@@ -44,6 +44,7 @@ import {
   type SyncStore,
   type UserProfile,
   type V2Meta,
+  UNDECRYPTABLE_V2,
 } from '@iris/core'
 import { configureCalls, attachCallTransport, decodeSignal, getCallEngine, isCallsConfigured, type CallSignal, type CallSignalingTransport } from '@/calls'
 import { configureMedia, registerMediaSendHandler, screenSecurity, setScreenSecurityAdapter, type OutgoingMedia } from '@/media'
@@ -58,6 +59,8 @@ import type {
   PrivacyState, SafetyInfo, ServiceEvents, Session, Topic,
 } from '../services'
 import { digitsOfQr, displayName, messageKey, previewText, toContact, toUiMessage } from './mapping'
+import { conversationLines, parseTaskData, shouldNotify, type TaskData } from '../../notify/format'
+import { notifier } from '../../notify/native'
 
 const PROD_HOST_HINT = API_BASE_URL
 
@@ -91,7 +94,12 @@ const mmkvSync = (id: string): SyncStore => {
 
 const isNetworkError = (e: unknown) => e instanceof TypeError || /network request failed|failed to fetch|timeout|not connected/i.test(String((e as Error)?.message ?? e))
 
-const DEFAULT_PREFS: AppSettings = { theme: 'system', screenSecurity: true, appLock: false, haptics: true, notifications: true }
+const DEFAULT_PREFS: AppSettings = { theme: 'system', screenSecurity: true, appLock: false, haptics: true, notifications: true, messagePreview: true }
+
+/** Notifications of one chat within this window after an alert update silently. */
+const ALERT_COALESCE_MS = 3_000
+
+type EnvelopeFrame = { envType: number; body: string; envelopeId: number; message: V2Meta }
 
 type ChatPrefs = Record<string, { pinned?: boolean; muted?: boolean; archived?: boolean }>
 
@@ -119,6 +127,10 @@ interface Acct {
   pending: Map<string, Message[]>
   profile?: UserProfile
   bio: string
+  /** Single-flight crypto setup (UI activation and headless pushes may both ask for it). */
+  cryptoReady: Promise<boolean> | null
+  /** Contacts refreshed, socket connected, push registered: the "UI is up" part of activation done. */
+  online: boolean
 }
 
 /**
@@ -140,8 +152,16 @@ export class Runtime {
   private backgroundAt = 0
   private lockSuppressedUntil = 0
   private nativeInstalled = false
+  /**
+   * Started by a push / notification action with no UI: the account's stores and Signal client are opened
+   * but the socket stays closed (the user must not show as "online" whenever a message arrives). Ends the
+   * first time the app comes to the foreground.
+   */
+  private headless: boolean
+  private lastAlertAt = new Map<string, number>()
 
-  constructor() {
+  constructor(opts: { headless?: boolean } = {}) {
+    this.headless = !!opts.headless
     this.booted = this.boot().catch(e => {
       console.warn('[runtime] boot failed', e)
     })
@@ -171,7 +191,10 @@ export class Runtime {
     if (patch.screenSecurity !== undefined) await setScreenSecure(next.screenSecurity).catch(() => {})
     if (patch.notifications !== undefined && this.acct) {
       if (next.notifications) void this.enablePush()
-      else void this.acct.platform.push.disable().catch(() => {})
+      else {
+        void this.acct.platform.push.disable().catch(() => {})
+        notifier.cancelAll()
+      }
     }
     this.events.emit('settings')
     return next
@@ -211,7 +234,11 @@ export class Runtime {
       } catch { /* socket closing */ }
     }
     if (s === 'active') {
-      if (this.openChat && a) this.sendRead(this.openChat)
+      this.leaveHeadless()
+      if (this.openChat && a) {
+        this.sendRead(this.openChat)
+        notifier.cancel(this.openChat)
+      }
       const callBusy = isCallsConfigured() && getCallEngine().getSnapshot().state.kind !== 'idle'
       const wantsLock = this.getPrefs().appLock && this.backgroundAt > 0 && Date.now() - this.backgroundAt > 20_000
       if (a && wantsLock && !callBusy && Date.now() > this.lockSuppressedUntil && !this.appLockLocked) {
@@ -221,6 +248,14 @@ export class Runtime {
       this.backgroundAt = 0
     }
     if (s === 'background' && a?.ctx) void this.token().then(t => maybeAutoBackup(a.me, t)).catch(() => {})
+  }
+
+  /** The UI is up (foreground, or a screen asked for the session): bring a headless-started account online. */
+  private leaveHeadless() {
+    if (!this.headless) return
+    this.headless = false
+    const a = this.acct
+    if (a?.client && !this.appLockLocked && !a.needsPassword) this.goOnline(a)
   }
 
   // ── boot / session ──────────────────────────────────────────────────
@@ -300,7 +335,12 @@ export class Runtime {
 
   nameOf = (username: string): string => {
     const u = this.acct?.users.find(x => x.username === username)
-    return u ? displayName(u) : username
+    if (u) return displayName(u)
+    for (const g of this.acct?.groups ?? []) {
+      const m = g.members.find(x => x.username === username)
+      if (m?.preferredName?.trim()) return m.preferredName.trim()
+    }
+    return username
   }
 
   private async openAccount(username: string): Promise<Acct> {
@@ -328,11 +368,14 @@ export class Runtime {
     const unread = (await p.kv.get<Record<string, number>>(`rt:unread:${username}`)) ?? {}
     const chatPrefs = (await p.kv.get<ChatPrefs>(`rt:chatprefs:${username}`)) ?? {}
     const users = (await p.kv.get<UserProfile[]>(`rt:users:${username}`)) ?? []
+    // Cached (encrypted at rest) so a push handled in the background still knows names, groups and blocks.
+    const groups = (await p.kv.get<GroupDto[]>(`rt:groups:${username}`)) ?? []
+    const blocked = (await p.kv.get<string[]>(`rt:blocked:${username}`)) ?? []
     const bio = (await p.kv.get<string>(`rt:bio:${username}`)) ?? ''
     const a: Acct = {
       me: username, platform, master: null, ctx: null, client: null, socket: null, needsPassword: false, gen: Date.now(),
-      users, groups: [], blocked: [], presence: new Map(), peerReadAt: new Map(), typing: new Map(), typingSet: new Set(),
-      unread, chatPrefs, lastCache: new Map(), pending: new Map(), bio,
+      users, groups, blocked, presence: new Map(), peerReadAt: new Map(), typing: new Map(), typingSet: new Set(),
+      unread, chatPrefs, lastCache: new Map(), pending: new Map(), bio, cryptoReady: null, online: false,
     }
     holder.a = a
     this.acct = a
@@ -359,8 +402,23 @@ export class Runtime {
     this.events.emit('session')
   }
 
-  /** Bring the open account up: legacy key (best effort), Signal device, socket, push, adapters. */
+  /** Bring the open account up: legacy key (best effort), Signal device, then (with UI) socket, push, adapters. */
   private async activate(a: Acct): Promise<void> {
+    if (!(await this.ensureCrypto(a))) return
+    if (this.headless) return // the first foreground brings it online (onAppState)
+    this.goOnline(a)
+  }
+
+  /** Keys + Signal device + client, no network presence. Single-flight; true when the client is ready. */
+  private ensureCrypto(a: Acct): Promise<boolean> {
+    if (a.client) return Promise.resolve(true)
+    a.cryptoReady ??= this.initCrypto(a).finally(() => {
+      a.cryptoReady = null
+    })
+    return a.cryptoReady
+  }
+
+  private async initCrypto(a: Acct): Promise<boolean> {
     const gen = a.gen
     const token = (await a.platform.tokens.getAccess()) ?? ''
     try {
@@ -372,34 +430,44 @@ export class Runtime {
       if (/Password required/.test(String((e as Error)?.message))) {
         a.needsPassword = true
         this.events.emit('session')
-        return
+        return false
       }
       console.warn('[runtime] legacy key setup skipped:', (e as Error)?.message)
     }
     try {
       const ctx = await initSignal(a.me, a.master, token, a.platform.kv)
-      if (a.gen !== gen) return
+      if (a.gen !== gen) return false
       ctx.store.onIdentity((contact, key) => noteIdentitySeen(a.me, contact, key, token).catch(e => console.warn('pin check failed', e)))
       a.ctx = ctx
       a.client?.dispose()
       a.client = new SignalClient(ctx, token, () => this.socketLike(a))
       a.needsPassword = false
       this.events.emit('session')
+      return true
     } catch (e) {
       if (/Password required/.test(String((e as Error)?.message))) {
         a.needsPassword = true
         this.events.emit('session')
-        return
+        return false
       }
       console.warn('[runtime] secure messaging setup failed', e)
-      return
+      return false
     }
-    void this.refreshContacts().catch(() => {})
-    void this.refreshGroups().catch(() => {})
-    this.connect(a)
-    void this.enablePush()
-    void maybeAutoBackup(a.me, token).catch(() => {})
-    void this.offerRestore(a, token)
+  }
+
+  /** The part of activation that needs (or implies) the UI: contacts, groups, live socket, push, backups. */
+  private goOnline(a: Acct) {
+    if (a.online || this.acct !== a || !a.client) return
+    a.online = true
+    void a.platform.tokens.getAccess().then(t => {
+      const token = t ?? ''
+      void this.refreshContacts().catch(() => {})
+      void this.refreshGroups().catch(() => {})
+      if (!a.socket) this.connect(a)
+      void this.enablePush()
+      void maybeAutoBackup(a.me, token).catch(() => {})
+      void this.offerRestore(a, token)
+    })
   }
 
   private restoreOffered = false
@@ -533,22 +601,232 @@ export class Runtime {
     this.events.emit('chats')
   }
 
-  private async onEnvelope(a: Acct, data: { envType: number; body: string; envelopeId: number; message: V2Meta }) {
+  private async onEnvelope(a: Acct, data: EnvelopeFrame) {
     const client = a.client
     if (!client) return // not acked: redelivered by the next sync
-    const { peer, message } = await client.open(data)
-    // Persisted before the ack, so a crash cannot lose a forward-secret message.
-    this.sendFrame({ type: 'ack', ids: [data.envelopeId] })
+    const { peer, message, fresh } = await client.open(data)
+    // Persisted before the ack, so a crash cannot lose a forward-secret message. No socket (woken by a push):
+    // ack over HTTP; if even that fails the envelope is simply redelivered (open() is idempotent).
+    if (!this.sendFrame({ type: 'ack', ids: [data.envelopeId] })) {
+      await this.ackOverHttp(a, [data.envelopeId]).catch(e => console.warn('[runtime] ack failed', (e as Error)?.message))
+    }
     const chatId = peer.startsWith('group:') ? peer.slice(6) : peer
     a.lastCache.set(chatId, message)
     if (message.from !== a.me) {
-      const looking = this.openChat === chatId && AppState.currentState === 'active'
+      const looking = this.isLooking(chatId)
       if (looking) this.sendRead(chatId)
-      else this.bumpUnread(a, chatId)
+      else if (fresh) this.bumpUnread(a, chatId)
       this.setPeerTyping(a, peer.startsWith('group:') ? chatId : message.from, false)
+      if (fresh) await this.notifyIncoming(a, chatId, peer, message, looking)
     }
     this.events.emit(`messages:${chatId}` as Topic)
     this.events.emit('chats')
+  }
+
+  private isLooking(chatId: string): boolean {
+    return this.openChat === chatId && AppState.currentState === 'active'
+  }
+
+  private async ackOverHttp(a: Acct, ids: number[]) {
+    const device = a.ctx?.deviceId
+    if (device == null) return
+    const res = await a.platform.transport.fetch('/api/signal/envelopes/ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device, ids }),
+    })
+    if (!res.ok) throw new Error(`ack failed (${res.status})`)
+  }
+
+  // ── notifications ───────────────────────────────────────────────────
+
+  /** Post / refresh the conversation notification for a freshly decrypted incoming message. */
+  private async notifyIncoming(a: Acct, chatId: string, peer: string, message: ChatMessage, looking: boolean) {
+    const prefs = this.getPrefs()
+    if (!shouldNotify({
+      fromMe: message.from === a.me,
+      notificationsOn: prefs.notifications,
+      muted: !!a.chatPrefs[chatId]?.muted,
+      blocked: a.blocked.includes(message.from),
+      looking,
+    })) return
+    if (!notifier.supported) return // older binary: the server still sends it a visible notification
+    if (message.content === UNDECRYPTABLE_V2 && !message.mediaId) {
+      notifier.generic('message')
+      return
+    }
+    await this.renderConversation(a, chatId, peer, {})
+  }
+
+  /** Draw the current state of one conversation's notification (also after an inline reply). */
+  private async renderConversation(a: Acct, chatId: string, peer: string, o: { silent?: boolean; unread?: number }) {
+    const prefs = this.getPrefs()
+    // App lock on = the account counts as locked: never show content or who wrote.
+    const preview = prefs.messagePreview !== false && !prefs.appLock
+    const group = peer.startsWith('group:')
+    const unread = o.unread ?? Math.max(1, a.unread[chatId] ?? 1)
+    const title = group ? await this.groupName(a, chatId) : this.nameOf(chatId)
+    const history = preview ? await getMessages(a.me, peer).catch(() => [] as ChatMessage[]) : []
+    // A burst (sync backlog, fast typer) alerts once, then updates the same notification quietly.
+    const now = Date.now()
+    const quiet = o.silent || now - (this.lastAlertAt.get(chatId) ?? 0) < ALERT_COALESCE_MS
+    if (!quiet) this.lastAlertAt.set(chatId, now)
+    notifier.showConversation({
+      chatId,
+      title,
+      group,
+      preview,
+      unread,
+      silent: quiet,
+      lines: preview ? conversationLines(history, { me: a.me, unread, nameOf: this.nameOf }) : [],
+    })
+  }
+
+  private async groupName(a: Acct, id: string): Promise<string> {
+    const known = a.groups.find(g => g.id === id)
+    if (known) return known.name
+    try {
+      const g = await groupApi.get((await a.platform.tokens.getAccess()) ?? '', id)
+      a.groups = [...a.groups.filter(x => x.id !== id), g]
+      void a.platform.kv.set(`rt:groups:${a.me}`, a.groups)
+      return g.name
+    } catch {
+      return 'Group'
+    }
+  }
+
+  /**
+   * Entry point of the headless JS task (mobile/index.js): data pushes and notification actions. Never throws;
+   * whatever goes wrong ends in a generic notification, and envelopes that were not opened stay queued.
+   */
+  async handleTask(raw: unknown): Promise<void> {
+    const task = parseTaskData(raw)
+    if (!task) return
+    try {
+      if (task.kind === 'push') await this.handlePush(task)
+      else if (task.kind === 'reply') await this.handleReplyAction(task.chatId, task.text)
+      else await this.handleReadAction(task.chatId)
+    } catch (e) {
+      console.warn('[runtime] background task failed', task.kind, (e as Error)?.message)
+      if (task.kind === 'push' && this.getPrefs().notifications) notifier.generic(task.type.startsWith('friend-') ? 'request' : 'message')
+    } finally {
+      if (task.kind === 'push') notifier.handled(task.pushId)
+    }
+  }
+
+  private async handlePush(task: Extract<TaskData, { kind: 'push' }>) {
+    await this.booted
+    const a = this.acct
+    if (!a) return // signed out here: the token is unregistered on logout, nothing to show
+    if (task.type === 'friend-request' || task.type === 'friend-accepted') {
+      await this.notifySocial(a, task.type)
+      return
+    }
+    // Locked behind the password (keys lost / device revoked) or setup failed: say only "New message".
+    // Nothing is acked, so every envelope is still there once the user unlocks.
+    if (a.needsPassword || !(await this.ensureCrypto(a)) || !a.ctx) {
+      if (this.getPrefs().notifications) notifier.generic('message')
+      return
+    }
+    const device = a.ctx.deviceId
+    if (task.type === 'msg') {
+      const res = await a.platform.transport.fetch(`/api/signal/envelopes/${task.eid}?device=${device}`)
+      if (res.status === 404) return // already opened + acked by the socket path, which notified
+      if (!res.ok) throw new Error(`envelope lookup failed (${res.status})`)
+      const meta = (await res.json()) as { message: V2Meta }
+      await this.onEnvelope(a, { envType: Number(task.et), body: task.env!, envelopeId: Number(task.eid), message: meta.message })
+      return
+    }
+    const res = await a.platform.transport.fetch(`/api/signal/envelopes?device=${device}`)
+    if (!res.ok) throw new Error(`pending lookup failed (${res.status})`)
+    for (const f of (await res.json()) as EnvelopeFrame[]) await this.onEnvelope(a, f)
+  }
+
+  /** Connection request received / accepted: the push carries no name, so look it up now. */
+  private async notifySocial(a: Acct, type: 'friend-request' | 'friend-accepted') {
+    const prefs = this.getPrefs()
+    if (!prefs.notifications) return
+    const preview = prefs.messagePreview !== false && !prefs.appLock
+    if (type === 'friend-request') {
+      this.events.emit('requests')
+      if (!preview) return notifier.social('Iris', 'New connection request', 'requests')
+      try {
+        const rows = await this.apiJson<{ fromUser: string; createdAt: string }[]>('/api/friends/requests/incoming')
+        const latest = [...rows].sort((x, y) => Date.parse(y.createdAt) - Date.parse(x.createdAt))[0]
+        if (!latest) return
+        const p = await this.apiJson<UserProfile>(`/api/users/${encodeURIComponent(latest.fromUser)}`).catch(() => ({ username: latest.fromUser }) as UserProfile)
+        notifier.social('New connection request', `${displayName(p)} wants to connect`, 'requests')
+      } catch {
+        notifier.social('Iris', 'New connection request', 'requests')
+      }
+      return
+    }
+    const before = new Set(a.users.map(u => u.username))
+    try {
+      await this.refreshContacts()
+    } catch { /* offline: generic text below */ }
+    const added = a.users.find(u => !before.has(u.username))
+    if (preview && added) notifier.social('Connection accepted', `${displayName(added)} accepted your connection request`, `chat/${encodeURIComponent(added.username)}`)
+    else notifier.social('Iris', 'Connection request accepted', '')
+  }
+
+  /** Open a socket just for this action if none is up; true when it is transient (close it afterwards). */
+  private async ensureSocket(a: Acct): Promise<boolean> {
+    const transient = !a.socket
+    if (transient) this.connect(a)
+    for (let i = 0; i < 75 && !a.socket?.isOpen; i++) await new Promise(r => setTimeout(r, 200))
+    if (!a.socket?.isOpen) {
+      if (transient) this.dropTransientSocket(a)
+      throw new Error('Not connected')
+    }
+    return transient
+  }
+
+  private dropTransientSocket(a: Acct) {
+    // A grace period lets the server's replies (sent / read) and any sync redelivery arrive.
+    setTimeout(() => {
+      if (a.online || this.acct !== a || !a.socket) return
+      a.socket.close()
+      a.socket = null
+    }, 3_000)
+  }
+
+  /** Inline reply from the notification: send through the normal path, mark read, show "You: …". */
+  private async handleReplyAction(chatId: string, text: string) {
+    await this.booted
+    const a = this.acct
+    if (!a) return
+    const peer = this.peerKey(chatId)
+    const shown = Math.max(1, a.unread[chatId] ?? 1)
+    let transient = false
+    try {
+      if (!(await this.ensureCrypto(a))) throw new Error('Secure messaging is locked')
+      transient = await this.ensureSocket(a)
+      await this.send(chatId, text)
+      await this.markRead(chatId)
+      await this.renderConversation(a, chatId, peer, { silent: true, unread: shown })
+    } catch (e) {
+      console.warn('[runtime] notification reply failed', (e as Error)?.message)
+      // Re-post (stops the reply spinner) and say it did not go out; the text stays as a failed bubble in the chat.
+      await this.renderConversation(a, chatId, peer, { silent: true, unread: shown }).catch(() => {})
+      notifier.social('Reply not sent', 'Open Iris to try again', `chat/${encodeURIComponent(chatId)}`)
+    } finally {
+      if (transient) this.dropTransientSocket(a)
+    }
+  }
+
+  /** "Mark as read" from the notification: clear unread, send the read receipt, drop the notification. */
+  private async handleReadAction(chatId: string) {
+    await this.booted
+    const a = this.acct
+    if (!a) return
+    notifier.cancel(chatId)
+    let transient = false
+    try {
+      transient = await this.ensureSocket(a)
+    } catch { /* offline: the receipt goes out when the chat is next opened */ }
+    await this.markRead(chatId)
+    if (transient) this.dropTransientSocket(a)
   }
 
   private bumpUnread(a: Acct, chatId: string, by = 1) {
@@ -588,11 +866,14 @@ export class Runtime {
 
   async getSession(): Promise<Session | null> {
     await this.booted
+    // Only screens ask for the session; the headless task never does.
+    if (AppState.currentState === 'active') this.leaveHeadless()
     return this.acct ? this.sessionOf(this.acct) : null
   }
 
   async login(username: string, password: string): Promise<Session> {
     await this.booted
+    this.leaveHeadless()
     username = username.trim()
     if (!/^[A-Za-z0-9_]{3,32}$/.test(username)) throw new AuthError('bad-credentials')
     await this.closeAccount(false)
@@ -609,6 +890,7 @@ export class Runtime {
 
   async signup(username: string, password: string): Promise<Session> {
     await this.booted
+    this.leaveHeadless()
     username = username.trim()
     if (!/^[A-Za-z0-9_]{3,32}$/.test(username)) throw new AuthError('invalid-username')
     await this.closeAccount(false)
@@ -652,6 +934,7 @@ export class Runtime {
     const a = this.acct
     if (!a) return
     await a.platform.push.disable().catch(() => {})
+    notifier.cancelAll()
     const refresh = await a.platform.tokens.getRefresh().catch(() => null)
     if (refresh) {
       await fetch(`${API_BASE_URL}/auth/logout`, {
@@ -683,6 +966,7 @@ export class Runtime {
     }
     this.appLockLocked = false
     if (!a.ctx) await this.activate(a)
+    else this.goOnline(a)
     this.events.emit('session')
     return this.sessionOf(a)
   }
@@ -693,6 +977,7 @@ export class Runtime {
     await a.platform.appLock.authenticate('Unlock Iris')
     this.appLockLocked = false
     if (!a.ctx && !a.needsPassword) await this.activate(a)
+    else this.goOnline(a)
     this.events.emit('session')
     return this.sessionOf(a)
   }
@@ -737,6 +1022,7 @@ export class Runtime {
     a.users = users
     a.blocked = blocked.map(b => b.username)
     void a.platform.kv.set(`rt:users:${a.me}`, users)
+    void a.platform.kv.set(`rt:blocked:${a.me}`, a.blocked)
     for (const u of users) this.sendFrame({ type: 'presence-query', user: u.username })
     this.events.emit('contacts')
     this.events.emit('requests')
@@ -826,6 +1112,7 @@ export class Runtime {
     const a = this.need()
     const rows = await this.apiJson<{ username: string }[]>('/api/blocks')
     a.blocked = rows.map(r => r.username)
+    void a.platform.kv.set(`rt:blocked:${a.me}`, a.blocked)
     return rows.map(r => toContact({ username: r.username }, { blocked: true }))
   }
 
@@ -890,7 +1177,10 @@ export class Runtime {
 
   setOpenChat(chatId: string | null) {
     this.openChat = chatId
-    if (chatId) void this.refreshMeta(chatId)
+    if (chatId) {
+      notifier.cancel(chatId)
+      void this.refreshMeta(chatId)
+    }
   }
 
   /** Server-side metadata for my sent messages: when the peer read them, whether a view-once was opened. */
@@ -1016,6 +1306,7 @@ export class Runtime {
 
   async markRead(chatId: string) {
     const a = this.need()
+    notifier.cancel(chatId)
     if ((a.unread[chatId] ?? 0) > 0) {
       a.unread[chatId] = 0
       void a.platform.kv.set(`rt:unread:${a.me}`, a.unread)
@@ -1140,6 +1431,7 @@ export class Runtime {
   async refreshGroups() {
     const a = this.need()
     a.groups = await groupApi.mine(await this.token())
+    void a.platform.kv.set(`rt:groups:${a.me}`, a.groups)
     this.events.emit('chats')
     for (const g of a.groups) this.events.emit(`group:${g.id}` as Topic)
   }

@@ -91,3 +91,20 @@ export function hashString(s: string): number {
   }
   return h >>> 0
 }
+
+// Hue pairs sampled around the Iris brand so avatars feel related but distinguishable.
+// (Pure, so notification avatars drawn natively use the same colors as the app.)
+const AVATAR_PALETTE: Array<[string, string]> = [
+  ['#5B5BD6', '#9D7BFF'],
+  ['#0EA5E9', '#6366F1'],
+  ['#EC4899', '#8B5CF6'],
+  ['#F59E0B', '#EF4444'],
+  ['#10B981', '#0EA5E9'],
+  ['#14B8A6', '#6366F1'],
+  ['#F43F5E', '#F59E0B'],
+  ['#8B5CF6', '#EC4899'],
+]
+
+export function avatarColors(seed: string): [string, string] {
+  return AVATAR_PALETTE[hashString(seed) % AVATAR_PALETTE.length]!
+}

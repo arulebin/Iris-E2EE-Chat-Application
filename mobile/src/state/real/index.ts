@@ -5,9 +5,13 @@ export { Runtime } from './runtime'
 
 let instance: Runtime | null = null
 
-/** The process-wide runtime (created on first use; boots the stored session in the background). */
-export function getRuntime(): Runtime {
-  instance ??= new Runtime()
+/**
+ * The process-wide runtime (created on first use; boots the stored session in the background). `headless`
+ * only matters for the first call: a runtime created by a push / notification action stays off the socket
+ * until the app is foregrounded.
+ */
+export function getRuntime(opts: { headless?: boolean } = {}): Runtime {
+  instance ??= new Runtime(opts)
   return instance
 }
 

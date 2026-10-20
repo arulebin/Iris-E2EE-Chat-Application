@@ -21,14 +21,14 @@ export async function ensureChannels(n: NotificationsLike, importance: { HIGH: n
     name: 'Messages',
     description: 'New message alerts',
     importance: importance.HIGH,
-    lockscreenVisibility: 0, // private: generic text on the lock screen
+    lockscreenVisibility: 2, // AndroidNotificationVisibility.PRIVATE: the public version on the lock screen
     vibrationPattern: [0, 250, 250, 250],
   })
   await n.setNotificationChannelAsync('calls', {
     name: 'Calls',
     description: 'Incoming voice and video calls',
     importance: importance.MAX,
-    lockscreenVisibility: 0,
+    lockscreenVisibility: 2, // PRIVATE
     vibrationPattern: [0, 250, 250, 250],
   })
 }
@@ -45,12 +45,19 @@ export function createPush(deps: {
   fetch: Fetcher
   kv: KV
   isDevice?: boolean
+  /**
+   * This install's Signal device id. Sent only when `dataPush` (the binary decrypts data-only message pushes
+   * itself): the server then pushes this device's own envelope instead of a generic visible notification.
+   */
+  getDeviceId?: () => number | null | undefined
+  dataPush?: boolean
 }) {
   const send = async (token: string) => {
+    const deviceId = deps.dataPush ? deps.getDeviceId?.() : null
     const res = await deps.fetch('/api/push/fcm-token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, app: APP_ID }),
+      body: JSON.stringify(deviceId != null ? { token, app: APP_ID, deviceId } : { token, app: APP_ID }),
     })
     if (!res.ok) throw new Error('Failed to register device for notifications')
     await deps.kv.set(TOKEN_KEY, token)

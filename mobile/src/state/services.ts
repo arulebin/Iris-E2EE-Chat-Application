@@ -158,6 +158,8 @@ export interface AppSettings {
   appLock: boolean
   haptics: boolean
   notifications: boolean
+  /** Show sender and text in message notifications. Off: "Iris / New message" (messages still decrypt). */
+  messagePreview: boolean
 }
 
 // ── services ─────────────────────────────────────────────────────────────

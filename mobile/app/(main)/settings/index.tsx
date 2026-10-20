@@ -63,7 +63,13 @@ export default function Settings() {
 
       <Section title="App">
         <ListItem icon="color-palette" title="Appearance" subtitle={THEME_LABEL[settings.theme]} chevron onPress={() => router.push('/settings/appearance')} />
-        <ListItem icon="notifications" title="Notifications" value={settings.notifications} onValueChange={v => update({ notifications: v })} />
+        <ListItem
+          icon="notifications"
+          title="Notifications"
+          subtitle={!settings.notifications ? 'Off' : settings.messagePreview ? 'On, with message preview' : 'On, no preview'}
+          chevron
+          onPress={() => router.push('/settings/notifications')}
+        />
         <ListItem icon="radio" title="Haptic feedback" value={settings.haptics} onValueChange={v => update({ haptics: v })} />
         <ListItem icon="information-circle" title="About Iris" chevron onPress={() => router.push('/settings/about')} />
       </Section>

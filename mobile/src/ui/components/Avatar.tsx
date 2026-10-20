@@ -1,25 +1,11 @@
 import { LinearGradient } from 'expo-linear-gradient'
 import { memo } from 'react'
 import { StyleSheet, View } from 'react-native'
-import { hashString, initials } from '../lib/validation'
+import { avatarColors, initials } from '../lib/validation'
 import { useTheme } from '../theme'
 import { Text } from './Text'
 
-// Hue pairs sampled around the Iris brand so avatars feel related but distinguishable.
-const PALETTE: Array<[string, string]> = [
-  ['#5B5BD6', '#9D7BFF'],
-  ['#0EA5E9', '#6366F1'],
-  ['#EC4899', '#8B5CF6'],
-  ['#F59E0B', '#EF4444'],
-  ['#10B981', '#0EA5E9'],
-  ['#14B8A6', '#6366F1'],
-  ['#F43F5E', '#F59E0B'],
-  ['#8B5CF6', '#EC4899'],
-]
-
-export function avatarColors(seed: string): [string, string] {
-  return PALETTE[hashString(seed) % PALETTE.length]!
-}
+export { avatarColors } from '../lib/validation'
 
 interface Props {
   name: string

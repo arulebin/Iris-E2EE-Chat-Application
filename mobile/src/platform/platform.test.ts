@@ -280,6 +280,23 @@ describe('createPush', () => {
     expect(await push.isRegistered()).toBe(false)
   })
 
+  it('sends the Signal device id only from a binary that decrypts data pushes', async () => {
+    const bodies: string[] = []
+    const fetch = async (_path: string, init?: RequestInit) => {
+      bodies.push(init?.body as string)
+      return new Response('{}', { status: 200 })
+    }
+    const base = { notifications: mkNotifications(), importance: { HIGH: 4, MAX: 5 }, fetch, kv: new MemoryKV(), getDeviceId: () => 7 }
+    await createPush({ ...base, dataPush: true }).enable()
+    expect(JSON.parse(bodies[0]!)).toEqual({ token: 'fcm-token-1', app: 'com.iris.chat.mobile', deviceId: 7 })
+    // Older binary (no native notifier): no device id, so the server keeps sending visible notifications.
+    await createPush({ ...base, dataPush: false }).enable()
+    expect(JSON.parse(bodies[1]!)).toEqual({ token: 'fcm-token-1', app: 'com.iris.chat.mobile' })
+    // Device not registered yet: same, until the next registration.
+    await createPush({ ...base, dataPush: true, getDeviceId: () => null }).enable()
+    expect(JSON.parse(bodies[2]!)).toEqual({ token: 'fcm-token-1', app: 'com.iris.chat.mobile' })
+  })
+
   it('rejects when permission denied or server refuses', async () => {
     const denied: NotificationsLike = { ...mkNotifications('denied'), requestPermissionsAsync: async () => ({ status: 'denied' }) }
     await expect(

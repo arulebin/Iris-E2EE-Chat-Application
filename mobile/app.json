@@ -90,7 +90,7 @@
             "buildArchs": [
               "arm64-v8a"
             ],
-            "extraProguardRules": "-keep class org.webrtc.** { *; }\n-keep class org.jni_zero.** { *; }\n-dontwarn org.webrtc.Dav1dDecoder$Natives\n-dontwarn org.jni_zero.**"
+            "extraProguardRules": "-keep class org.webrtc.** { *; }\n-keep class org.jni_zero.** { *; }\n-dontwarn org.webrtc.Dav1dDecoder$Natives\n-dontwarn org.jni_zero.**\n-keep class com.iris.notify.** { *; }\n-keep class com.iris.calls.IrisFirebaseMessagingService { *; }"
           }
         }
       ],

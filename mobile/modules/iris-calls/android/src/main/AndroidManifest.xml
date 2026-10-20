@@ -39,5 +39,14 @@
     <receiver
       android:name="com.iris.calls.CallActionReceiver"
       android:exported="false" />
+
+    <!-- Message notifications: headless JS for data pushes + Reply / Mark-as-read actions. -->
+    <service
+      android:name="com.iris.notify.IrisMessageTaskService"
+      android:exported="false" />
+
+    <receiver
+      android:name="com.iris.notify.MessageActionReceiver"
+      android:exported="false" />
   </application>
 </manifest>
