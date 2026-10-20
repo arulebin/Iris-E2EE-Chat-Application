@@ -18,13 +18,29 @@ public class FriendController {
     private final FriendRequestRepository friendRepository;
     private final UserRepository userRepository;
     private final PushNotificationService pushService;
+    private final ChatWebSocketHandler chatHandler;
 
     public FriendController(FriendRequestRepository friendRepository,
                             UserRepository userRepository,
-                            PushNotificationService pushService) {
+                            PushNotificationService pushService,
+                            ChatWebSocketHandler chatHandler) {
         this.friendRepository = friendRepository;
         this.userRepository   = userRepository;
         this.pushService      = pushService;
+        this.chatHandler      = chatHandler;
+    }
+
+    // Push text stays generic (no usernames leave via FCM/Web Push); open clients
+    // get a WebSocket nudge so request lists and friend lists refresh live.
+    private void notifyRequest(String to) {
+        pushService.sendToUser(to, "Iris", "New connection request");
+        chatHandler.notifyUser(to, "friends-changed");
+    }
+
+    private void notifyAccepted(String requester, String accepter) {
+        pushService.sendToUser(requester, "Iris", "Connection request accepted");
+        chatHandler.notifyUser(requester, "friends-changed");
+        chatHandler.notifyUser(accepter, "friends-changed"); // the accepter's other tabs/devices
     }
 
     public record FriendRequestDto(Long id, String fromUser, String toUser, String status, Instant createdAt) {}
@@ -64,7 +80,7 @@ public class FriendController {
             FriendRequest req = incoming.get();
             req.setStatus(FriendRequest.Status.ACCEPTED);
             friendRepository.save(req);
-            pushService.sendToUser(them, "Iris", me + " accepted your connection request");
+            notifyAccepted(them, me);
             return ResponseEntity.ok(toDto(req));
         }
 
@@ -77,13 +93,13 @@ public class FriendController {
             }
             req.setStatus(FriendRequest.Status.PENDING); // was REJECTED
             friendRepository.save(req);
-            pushService.sendToUser(them, "Iris", me + " wants to connect with you");
+            notifyRequest(them);
             return ResponseEntity.ok(toDto(req));
         }
 
         // Fresh request.
         FriendRequest req = friendRepository.save(new FriendRequest(me, them));
-        pushService.sendToUser(them, "Iris", me + " wants to connect with you");
+        notifyRequest(them);
         return ResponseEntity.ok(toDto(req));
     }
 
@@ -102,7 +118,7 @@ public class FriendController {
         }
         req.setStatus(FriendRequest.Status.ACCEPTED);
         FriendRequest saved = friendRepository.save(req);
-        pushService.sendToUser(req.getFromUser(), "Iris", auth.getName() + " accepted your connection request");
+        notifyAccepted(req.getFromUser(), auth.getName());
         return toDto(saved);
     }
 

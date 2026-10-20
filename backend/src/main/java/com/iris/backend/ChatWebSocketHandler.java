@@ -69,10 +69,11 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     public void afterConnectionEstablished(WebSocketSession session) throws IOException {
         String username = (String) session.getAttributes().get("username");
         session.getAttributes().put("visible", Boolean.TRUE);
-        sessionsByUser
-            .computeIfAbsent(username, k -> new CopyOnWriteArraySet<>())
-            .add(session);
+        Set<WebSocketSession> userSessions = sessionsByUser
+            .computeIfAbsent(username, k -> new CopyOnWriteArraySet<>());
+        userSessions.add(session);
         userStatusService.markOnline(username);
+        if (userSessions.size() == 1) broadcastPresence(username, true);
 
         if (Boolean.TRUE.equals(session.getAttributes().get("deviceRevoked"))) {
             session.sendMessage(new TextMessage("{\"type\":\"device-revoked\"}"));
@@ -91,6 +92,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             if (userSessions.isEmpty()) {
                 sessionsByUser.remove(username);
                 userStatusService.markOffline(username);
+                broadcastPresence(username, false);
             }
         }
     }
@@ -125,6 +127,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             List<Long> ids = new ArrayList<>();
             root.get("ids").forEach(n -> { if (n.canConvertToLong()) ids.add(n.asLong()); });
             envelopes.ack(ids, sender, deviceId);
+            return;
+        }
+
+        // Online status of one contact, answered only for accepted friends.
+        if ("presence-query".equals(type)) {
+            if (!root.has("user")) return;
+            String user = root.get("user").asText();
+            if (!areFriends(sender, user)) return;
+            session.sendMessage(new TextMessage(presenceFrame(user, userStatusService.isOnline(user))));
             return;
         }
 
@@ -308,6 +319,36 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             arr.add(n);
         }
         return arr;
+    }
+
+    private String presenceFrame(String user, boolean online) {
+        ObjectNode n = objectMapper.createObjectNode();
+        n.put("type", "presence");
+        n.put("user", user);
+        n.put("online", online);
+        return n.toString();
+    }
+
+    /** Tell a user's friends that their first socket opened / last socket closed. */
+    private void broadcastPresence(String username, boolean online) {
+        String frame = presenceFrame(username, online);
+        for (FriendRequest fr : friendRequestRepository.findAcceptedByUser(username)) {
+            String friend = fr.getFromUser().equals(username) ? fr.getToUser() : fr.getFromUser();
+            try {
+                sendToUser(friend, frame);
+            } catch (IOException ignored) {
+                // friend's socket went away mid-send
+            }
+        }
+    }
+
+    /** Best-effort nudge to every open session of a user, e.g. {"type":"friends-changed"}. */
+    public void notifyUser(String username, String type) {
+        try {
+            sendToUser(username, objectMapper.createObjectNode().put("type", type).toString());
+        } catch (IOException ignored) {
+            // client re-fetches on its next load anyway
+        }
     }
 
     /** Called after a device is removed: tell its open sockets, then drop them. */
