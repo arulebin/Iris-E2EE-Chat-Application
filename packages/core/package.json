@@ -8,7 +8,8 @@
   "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fflate": "./src/fflateGzip.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -16,10 +17,11 @@
   },
   "dependencies": {
     "@noble/curves": "2.4.0",
+    "@privacyresearch/libsignal-protocol-typescript": "0.0.16",
     "fflate": "0.8.3"
   },
   "devDependencies": {
-    "@privacyresearch/libsignal-protocol-typescript": "0.0.16",
+    "@iris/crypto-conformance": "0.1.0",
     "@types/node": "24.12.2",
     "typescript": "6.0.3",
     "vitest": "5.0.5"

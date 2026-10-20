@@ -1,4 +1,5 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
+import { KeystoreKeyMissingError, type KeyWrapper } from '@iris/core'
 import { fromBase64, toBase64 } from '../crypto'
 import { appLockWrapper } from './appLockWrapper'
 
@@ -11,16 +12,10 @@ import { appLockWrapper } from './appLockWrapper'
 // backup, a rooted dump) then yields nothing usable without that device's
 // Keystore. See android/.../KeystorePlugin.java.
 
-/** Wraps/unwraps a small secret under a key that never leaves secure hardware. */
-export type KeyWrapper = {
-  wrap(raw: Uint8Array): Promise<string>
-  unwrap(wrapped: string): Promise<Uint8Array>
-  /** Destroy the wrapping key: everything wrapped under it becomes unreadable. */
-  reset(): Promise<void>
-}
-
-/** The Keystore entry is gone (app data cleared, restored to another device): wrapped data is lost. */
-export class KeystoreKeyMissingError extends Error {}
+// KeyWrapper (and KeystoreKeyMissingError) are defined in @iris/core; this file is
+// the Capacitor Keystore implementation of it.
+export type { KeyWrapper }
+export { KeystoreKeyMissingError }
 
 type KeystorePlugin = {
   wrap(opts: { alias: string; data: string }): Promise<{ data: string }>

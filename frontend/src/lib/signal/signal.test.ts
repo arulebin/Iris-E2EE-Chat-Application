@@ -5,7 +5,7 @@ import { SignalStore } from './store'
 import { b64, generatePreKeys, generateSignedPreKey } from './device'
 import { decryptFromDevice, encryptForDevice, IdentityMismatchError, pad, startSession, unpad } from './messaging'
 import type { BundleDto } from './api'
-import { formatRecoveryKey, openBackup, parseRecoveryKey, sealBackup } from '../backup'
+import { formatRecoveryKey, importRecoveryKey, openBackup, parseRecoveryKey, sealBackup } from '../backup'
 import { HistoryStore, mergeHistory } from '../messageStore'
 import { KeystoreKeyMissingError, type KeyWrapper } from '../nativeKeystore'
 import type { ChatMessage } from '../../types'
@@ -226,7 +226,7 @@ describe('Android Keystore storage key', () => {
 
 /** Same underlying data, new KV identity — so the store's per-KV key cache starts cold (like an app restart). */
 function memoryKVView(kv: KV): KV {
-  return { get: k => kv.get(k), set: (k, v) => kv.set(k, v), del: k => kv.del(k), keys: p => kv.keys(p) }
+  return { get: k => kv.get(k), set: (k, v) => kv.set(k, v), delete: k => kv.delete(k), keys: p => kv.keys(p) }
 }
 
 const bytesOf = (b: ArrayBuffer) => Array.from(new Uint8Array(b))
@@ -245,9 +245,7 @@ describe('padding', () => {
 describe('history backup', () => {
   const payload = { v: 1 as const, createdAt: '2026-10-20T00:00:00Z', conversations: { bob: [{ id: 1, from: 'alice', to: 'bob', content: 'hi', sentAt: '2026-10-20T00:00:00Z', v: 2 }] } }
 
-  async function keyFrom(raw: Uint8Array<ArrayBuffer>) {
-    return crypto.subtle.importKey('raw', raw, 'HKDF', false, ['deriveKey', 'deriveBits'])
-  }
+  const keyFrom = (raw: Uint8Array) => importRecoveryKey(raw)
 
   it('formats and parses recovery keys (forgiving about case, spaces, I/O)', () => {
     const raw = crypto.getRandomValues(new Uint8Array(32))

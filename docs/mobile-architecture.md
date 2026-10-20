@@ -20,11 +20,18 @@ backend/                     Spring Boot, unchanged
 docs/
 ```
 
-Why `frontend/` is not a workspace yet: it pins React 19.2 / Vite 8 while RN 0.88 needs
-React 19.3.0 exactly. Hoisting both into one root `node_modules` is the classic source of
-duplicate-React and Metro resolution bugs. Phase 2 moves the web app in once core is big
-enough to justify it, with `react` resolved per workspace (nohoist or overrides) and a
-CI check that each app bundles a single copy of React.
+Why `frontend/` is still NOT an npm workspace (phase 2 decision): it pins React 19.2 / Vite 8
+while RN 0.88 needs React 19.3.0 exactly, and npm workspaces hoist into ONE root `node_modules`
+(npm has no nohoist; `overrides` would force a single React on both apps). Instead the web app
+stays a standalone npm project (own `package-lock.json`, own `node_modules`, own React) and
+consumes `@iris/core` as source through a Vite alias plus matching tsconfig `paths`
+(`frontend/vite.config.ts`, `frontend/tsconfig.app.json`). Core's one runtime dependency that the
+web bundles, libsignal, is resolved from `frontend/node_modules` (`resolve.dedupe` / `paths`), so
+there is exactly one copy in the bundle. Consequences: no hoisting or React-version coupling; the
+Docker build context is the repo root (`frontend/Dockerfile`); a Vercel project rooted at
+`frontend/` must have "include source files outside of the Root Directory" enabled (its default).
+A single copy of React per app is guaranteed structurally: core imports no React
+(`packages/core/test/purity.test.ts` enforces it).
 
 Source-level consumption: `@iris/core` is consumed as TypeScript source (`main: src/index.ts`).
 Vite and Metro both transpile workspace TS, so there is no build step for core. Imports
@@ -282,3 +289,12 @@ Tests: `npm test -w @iris/core` (28), `npm test -w @iris/crypto-conformance` (45
 - Push: expo-notifications ships its own `FirebaseMessagingService`; data-only call pushes (`IrisCallPush.handle`, see the calls branch) need a service that delegates to it.
 - Re-run the benchmark on a release build and on a low-end device; the numbers above are dev-bundle.
 - `frontend/` joins the workspaces in phase 2.
+
+### Earlier foundation notes
+
+- `npx expo prebuild --platform android` succeeded (package `com.iris.chat.mobile`).
+- TODO: `./gradlew assembleDebug` in `mobile/android` was still running when this foundation was handed off (first run downloads NDK 27.1 and Android SDK Platform 37; build with Android Studio's JBR, JDK 21, because JDK 26 is unsupported; `local.properties` with `sdk.dir` is gitignored). Record the result here once finished.
+- TODO: run the Diagnostics screen on a device and record the PBKDF2 600k and safety-number timings (phase 1 gate).
+- Phase 2 done: crypto, Signal client/store, stores, backup, API session and shared types now live in
+  `@iris/core`; the web app re-exports them from its old module paths. The platform seams are injected
+  once with `configureCore()` (`frontend/src/lib/corePlatform.ts` is the web implementation).

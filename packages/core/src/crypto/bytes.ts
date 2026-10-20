@@ -16,7 +16,7 @@ export function toBase64(bytes: Bytes): string {
   return out
 }
 
-export function fromBase64(s: string): Bytes {
+export function fromBase64(s: string): Uint8Array<ArrayBuffer> {
   const clean = s.replace(/[\s=]+$/g, '')
   const out = new Uint8Array(Math.floor((clean.length * 3) / 4))
   let bits = 0

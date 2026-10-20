@@ -38,7 +38,9 @@ services:
     # no host port: only reachable from the backend on the compose network
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
       - "8080:80"
     depends_on:

@@ -1,3 +1,4 @@
+import type { MasterKey } from '@iris/core'
 import { Capacitor } from '@capacitor/core'
 import { AtRestCipher, dropAllStorageKeys } from './atRest'
 import {
@@ -126,7 +127,7 @@ export function getEscrowStatus(user: string): Promise<EscrowStatus> {
  * (the lock layer prompts if the window lapsed): used by Settings for users
  * who enabled the lock before escrow existed, and after a password change.
  */
-export async function setupEscrow(user: string, master: CryptoKey): Promise<void> {
+export async function setupEscrow(user: string, master: MasterKey): Promise<void> {
   const cfg = getConfig(user)
   if (!cfg || cfg.mode === 'gate') return
   await writeEscrows(idbKV, escrowSlots(user), master, rawKeyOf(user))
@@ -186,7 +187,7 @@ export async function recoverWithPassword(user: string, password: string): Promi
     for (const { prefix } of slots(user)) {
       const key = await crypto.subtle.importKey('raw', raws.get(prefix)! as Uint8Array<ArrayBuffer>, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
       await idbKV.set(prefix + 'sk', key)
-      await idbKV.del(prefix + SKW)
+      await idbKV.delete(prefix + SKW)
     }
     await removeAllEscrows(user)
     setConfig(user, null)
@@ -249,12 +250,12 @@ export async function abandonAppLock(user: string): Promise<void> {
  * prompt, then double-wrap the existing storage keys. Web: register a platform
  * credential; with PRF, migrate the storage keys to PRF-wrapped ones.
  */
-export async function enableAppLock(user: string, timing: LockTiming, escrowMaster: CryptoKey | null = null): Promise<AppLockConfig> {
+export async function enableAppLock(user: string, timing: LockTiming, escrowMaster: MasterKey | null = null): Promise<AppLockConfig> {
   if (Capacitor.isNativePlatform()) return enableNative(user, timing, escrowMaster)
   return enableWeb(user, timing, escrowMaster)
 }
 
-async function enableNative(user: string, timing: LockTiming, escrowMaster: CryptoKey | null): Promise<AppLockConfig> {
+async function enableNative(user: string, timing: LockTiming, escrowMaster: MasterKey | null): Promise<AppLockConfig> {
   // Make sure both storage keys exist (single-wrapped) so there is something to escrow and lock.
   await loadStorageKeys(user)
   dropAllStorageKeys()
@@ -299,7 +300,7 @@ async function enableNative(user: string, timing: LockTiming, escrowMaster: Cryp
   }
 }
 
-async function enableWeb(user: string, timing: LockTiming, escrowMaster: CryptoKey | null): Promise<AppLockConfig> {
+async function enableWeb(user: string, timing: LockTiming, escrowMaster: MasterKey | null): Promise<AppLockConfig> {
   const reg = await webRegister(user)
   const cfg: AppLockConfig = {
     enabled: true, mode: reg.prf ? 'prf' : 'gate', timing, credId: reg.credId, salt: reg.salt,
@@ -363,7 +364,7 @@ export async function disableAppLock(user: string): Promise<void> {
       const key = await crypto.subtle.importKey('raw', raw as Uint8Array<ArrayBuffer>, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
       raw.fill(0)
       await idbKV.set(prefix + 'sk', key)
-      await idbKV.del(prefix + SKW)
+      await idbKV.delete(prefix + SKW)
     }
     await removeAllEscrows(user)
     setConfig(user, null)
@@ -383,7 +384,7 @@ export async function passwordFallback(user: string): Promise<void> {
   const cfg = getConfig(user)
   if (cfg && cfg.mode !== 'gate') {
     for (const p of [`sig:${user}:`, `hist:${user}:`, `iris-msgs-v2:${user}:`]) {
-      for (const k of await idbKV.keys(p)) await idbKV.del(k)
+      for (const k of await idbKV.keys(p)) await idbKV.delete(k)
     }
     for (const { alias } of slots(user)) await plainNativeKeyWrapper(alias)?.reset().catch(() => undefined)
     if (Capacitor.isNativePlatform()) await nativeDeleteKey(user).catch(() => undefined)

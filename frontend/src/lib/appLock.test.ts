@@ -1,3 +1,4 @@
+import type { MasterKey } from '@iris/core'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Orchestration tests for App lock + password escrow, on Android-like fakes:
@@ -133,10 +134,10 @@ async function readBack(sealed: { s: Uint8Array; m: Uint8Array }) {
 
 const PW = 'hunter2 hunter2'
 let salt: string
-let master: CryptoKey
+let master: MasterKey
 
 beforeEach(async () => {
-  for (const k of await kv.keys('')) await kv.del(k)
+  for (const k of await kv.keys('')) await kv.delete(k)
   for (const k of Object.keys(store)) delete store[k]
   setConfig(user, null)
   setEscrowSessionMaster(null, null)
