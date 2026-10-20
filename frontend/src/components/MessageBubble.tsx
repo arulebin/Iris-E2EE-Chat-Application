@@ -17,6 +17,7 @@ type Props = {
   replyTo?: ChatMessage | null;
   onReply?: () => void;
   timestamp?: string;
+  read?: boolean; // own messages only: the peer has seen it
 };
 
 function MediaContent({
@@ -163,6 +164,7 @@ export function MessageBubble({
   replyTo,
   onReply,
   timestamp,
+  read,
 }: Props) {
   const hasMedia = !!mediaId && !!token;
 
@@ -237,7 +239,10 @@ export function MessageBubble({
             {content}
             <div className="text-[10px] text-white/60 absolute bottom-1.5 right-3 flex items-center gap-1">
               {timestamp}
-              <CheckIcon className="w-3 h-3 text-white/80" />
+              <span className="flex" aria-label={read ? "Read" : "Sent"}>
+                <CheckIcon className="w-3 h-3 text-white/80" />
+                {read && <CheckIcon className="w-3 h-3 -ml-2 text-white" />}
+              </span>
             </div>
           </div>
         </div>

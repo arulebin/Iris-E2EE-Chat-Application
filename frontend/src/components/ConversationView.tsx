@@ -12,6 +12,8 @@ type Props = {
   peer: string;
   peerProfile?: UserProfile;
   online?: boolean;
+  typing?: boolean;
+  peerReadAt?: number;
   me: string | null;
   token: string | null;
   messages: ChatMessage[];
@@ -41,6 +43,8 @@ export function ConversationView(props: Props) {
     peer,
     peerProfile,
     online,
+    typing,
+    peerReadAt,
     me,
     token,
     messages,
@@ -73,6 +77,7 @@ export function ConversationView(props: Props) {
         peer={peer}
         peerProfile={peerProfile}
         online={online}
+        typing={typing}
         callState={callState}
         onBack={onBack}
         onStartVoiceCall={onStartVoiceCall}
@@ -105,6 +110,7 @@ export function ConversationView(props: Props) {
         token={token}
         onMarkSnapViewed={onMarkSnapViewed}
         onStartReply={onStartReply}
+        peerReadAt={peerReadAt}
       />
 
       <MessageInput

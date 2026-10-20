@@ -66,8 +66,10 @@ function App() {
   // ── crypto state ────────────────────────────────────────────────
   const [privateKey, setPrivateKey] = useState<CryptoKey | null>(null);
   const [myPublicKey, setMyPublicKey] = useState<CryptoKey | null>(null);
-  const [recipientPublicKey, setRecipientPublicKey] =
-    useState<CryptoKey | null>(null);
+  // The open contact's keys, tagged with whom they belong to so a stale key can
+  // never pair with a newly opened conversation (see the derivation below).
+  const [contactKeys, setContactKeys] =
+    useState<{ peer: string; rsaKey: CryptoKey | null; identityKey: ArrayBuffer | null } | null>(null);
   // Set when the keypair can't be unlocked because no password is in memory
   // (e.g. reopening the app on a persisted token with IndexedDB evicted), which
   // routes the user to UnlockKeyView instead of a silently-broken session.
@@ -83,7 +85,6 @@ function App() {
   // id is state so the socket reconnects as that device once it's registered.
   const signalRef = useRef<SignalClient | null>(null);
   const [signalDeviceId, setSignalDeviceId] = useState<number | null>(null);
-  const [recipientIdentity, setRecipientIdentity] = useState<ArrayBuffer | null>(null);
   const [offerRestore, setOfferRestore] = useState(false);
   // Bumped after a backup restore so the open conversation reloads local history.
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -110,12 +111,24 @@ function App() {
 
   // ── friend requests ─────────────────────────────────────────────
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
+  // Open conversation's live status (all metadata the server already relays).
+  // Keyed by peer, like contactKeys, so switching chats needs no reset.
+  const [peerLive, setPeerLive] = useState<{ peer: string; online: boolean; typing: boolean; readAt: number }>(
+    { peer: "", online: false, typing: false, readAt: 0 });
+  const updatePeerLive = useCallback((peer: string, patch: Partial<{ online: boolean; typing: boolean; readAt: number }>) => {
+    setPeerLive((prev) => ({ ...(prev.peer === peer ? prev : { peer, online: false, typing: false, readAt: 0 }), ...patch }));
+  }, []);
+  const typingSentAtRef = useRef(0);
+  const typingStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const peerTypingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── routing (React Router) ───────────────────────────────────────
   const navigate = useNavigate();
   const location = useLocation();
   const chatMatch = /^\/chat\/(.+)$/.exec(location.pathname);
   const recipient = chatMatch ? decodeURIComponent(chatMatch[1]) : "";
+  const recipientPublicKey = contactKeys?.peer === recipient ? contactKeys.rsaKey : null;
+  const recipientIdentity = contactKeys?.peer === recipient ? contactKeys.identityKey : null;
   const view = location.pathname === "/settings" ? "settings"
              : chatMatch                          ? "chat"
              :                                     "list";
@@ -129,6 +142,7 @@ function App() {
   const decryptIncomingRef = useRef<((m: ChatMessage) => Promise<ChatMessage>) | null>(null);
   const meRef = useRef<string | null>(null);
   const handleDeviceRevokedRef = useRef<(() => Promise<void>) | null>(null);
+  const refreshFriendsRef = useRef<(() => void) | null>(null);
 
   const me = getUsername(token);
 
@@ -184,8 +198,7 @@ function App() {
     setUsers([]);
     setPrivateKey(null);
     setMyPublicKey(null);
-    setRecipientPublicKey(null);
-    setRecipientIdentity(null);
+    setContactKeys(null);
     setKeyMaterial(null);
     setNeedsKeyPassword(false);
     setKeyError(null);
@@ -357,19 +370,10 @@ function App() {
             setUsers(prev =>
               prev.find(u => u.username === profile.username) ? prev : [profile, ...prev]
             );
-            setRecipientPublicKey(null);
-            setRecipientIdentity(null);
+            setContactKeys(null);
             setMessages([]);
             setReplyTo(null);
             navigate(`/chat/${encodeURIComponent(profile.username)}`, { replace: true });
-            if (me) {
-              resolveContactKeys(me, profile.username, token!)
-                .then(({ rsaKey, identityKey }) => {
-                  setRecipientPublicKey(rsaKey);
-                  setRecipientIdentity(identityKey);
-                })
-                .catch(console.error);
-            }
           } else {
             navigate("/", { replace: true });
           }
@@ -434,6 +438,11 @@ function App() {
         const merged = mergeHistory(decrypted, await getMessages(me, recipient));
         if (cancelled) return;
         setMessages(merged);
+        const readTimes = history
+          .filter((m) => m.from === me && m.readAt)
+          .map((m) => Date.parse(m.readAt!));
+        updatePeerLive(recipient, { readAt: readTimes.length ? Math.max(...readTimes) : 0 });
+        if (history.some((m) => m.from === recipient && !m.readAt)) sendRead(recipient);
         // Don't poison the cache with decrypt failures — otherwise broken bubbles
         // persist and reappear even after the key is fixed. Only cache clean decrypts.
         const legacy = decrypted.filter((m) => m.v !== 2);
@@ -443,7 +452,56 @@ function App() {
       })
       .catch(() => { /* serve via offline cache silently */ });
     return () => { cancelled = true; };
-  }, [token, recipient, privateKey, decryptIncoming, me, historyVersion]);
+  }, [token, recipient, privateKey, decryptIncoming, me, historyVersion, updatePeerLive]);
+
+  // Resolve the open conversation's keys from the route, so a reload or deep
+  // link to /chat/:user works the same as tapping the contact in the list.
+  useEffect(() => {
+    if (!token || !me || !recipient) return;
+    let cancelled = false;
+    resolveContactKeys(me, recipient, token)
+      .then(({ rsaKey, identityKey }) => {
+        if (!cancelled) setContactKeys({ peer: recipient, rsaKey, identityKey });
+      })
+      .catch((err) => console.error(`No key for ${recipient}:`, err));
+    return () => { cancelled = true; };
+  }, [token, me, recipient]);
+
+  // Tell the server we've seen `peer`'s messages (only while actually looking).
+  function sendRead(peer: string) {
+    if (!peer || document.hidden || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: "read", from: peer }));
+  }
+
+  function sendTyping(state: "start" | "stop") {
+    if (!recipient || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: "typing", to: recipient, state }));
+  }
+
+  // Throttled "typing" while the user types; "stop" after a pause.
+  function handleInputChange(value: string) {
+    setInput(value);
+    if (!value.trim()) {
+      if (typingSentAtRef.current) { typingSentAtRef.current = 0; sendTyping("stop"); }
+      return;
+    }
+    if (Date.now() - typingSentAtRef.current > 2500) {
+      typingSentAtRef.current = Date.now();
+      sendTyping("start");
+    }
+    if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+    typingStopTimerRef.current = setTimeout(() => {
+      typingSentAtRef.current = 0;
+      sendTyping("stop");
+    }, 3000);
+  }
+
+  // New conversation → ask whether the peer is online.
+  useEffect(() => {
+    if (recipient && wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "presence-query", user: recipient }));
+    }
+  }, [recipient]);
 
   // Add (or update in place) one message in the open conversation.
   const appendMessage = useCallback((message: ChatMessage) => {
@@ -454,12 +512,31 @@ function App() {
     });
   }, []);
 
+  // Re-pull the friend list and pending requests (server nudges with "friends-changed").
+  const refreshFriends = useCallback(() => {
+    if (!token) return;
+    const headers = { Authorization: `Bearer ${token}` };
+    fetch(`${apiBase}/api/users`, { headers })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((list: UserProfile[] | null) => {
+        if (!list) return;
+        setUsers(list);
+        if (me) set(`users_list_${me}`, list).catch(console.error);
+      })
+      .catch(console.error);
+    fetch(`${apiBase}/api/friends/requests/incoming`, { headers })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((reqs: FriendRequest[] | null) => { if (reqs) setFriendRequests(reqs); })
+      .catch(console.error);
+  }, [token, me]);
+
   // Sync refs read by ws.onmessage
   useEffect(() => {
     recipientRef.current = recipient;
     decryptIncomingRef.current = decryptIncoming;
     meRef.current = me;
     handleDeviceRevokedRef.current = handleDeviceRevoked;
+    refreshFriendsRef.current = refreshFriends;
   });
 
   // WebSocket lifecycle: connects on login, reconnects with exponential backoff on drop
@@ -485,6 +562,7 @@ function App() {
         }));
         // Pull envelopes queued while this device was offline.
         if (signalDeviceId) ws.send(JSON.stringify({ type: "sync" }));
+        if (recipientRef.current) ws.send(JSON.stringify({ type: "presence-query", user: recipientRef.current }));
       };
 
       ws.onmessage = async (e) => {
@@ -499,13 +577,38 @@ function App() {
             await handleDeviceRevokedRef.current?.();
             return;
           }
+          if (data?.type === "friends-changed") {
+            refreshFriendsRef.current?.();
+            return;
+          }
+          if (data?.type === "presence") {
+            if (data.user === recipientRef.current) updatePeerLive(data.user, { online: !!data.online });
+            return;
+          }
+          if (data?.type === "typing") {
+            if (data.from !== recipientRef.current) return;
+            const peer = data.from as string;
+            const typing = data.state !== "stop";
+            updatePeerLive(peer, { typing });
+            if (peerTypingTimerRef.current) clearTimeout(peerTypingTimerRef.current);
+            // A lost "stop" mustn't leave "typing..." up forever.
+            if (typing) peerTypingTimerRef.current = setTimeout(() => updatePeerLive(peer, { typing: false }), 6000);
+            return;
+          }
+          if (data?.type === "read-receipt") {
+            if (data.by === recipientRef.current) updatePeerLive(data.by, { readAt: Date.now() });
+            return;
+          }
           if (data?.type === "envelope") {
             const client = signalRef.current;
             if (!client) return; // not acked → redelivered on the next sync
             const { peer, message } = await client.open(data as { envType: number; body: string; message: V2Meta });
             // Persisted before the ack, so a crash can't lose a forward-secret message.
             ws.send(JSON.stringify({ type: "ack", ids: [data.envelopeId] }));
-            if (peer === recipientRef.current) appendMessage(message);
+            if (peer === recipientRef.current) {
+              appendMessage(message);
+              if (message.from === peer) { updatePeerLive(peer, { typing: false }); sendRead(peer); }
+            }
             return;
           }
           const msg = data as ChatMessage;
@@ -515,6 +618,7 @@ function App() {
             (msg.from === currentMe && msg.to === currentRecipient) ||
             (msg.from === currentRecipient && msg.to === currentMe);
           if (isCurrentChat && decryptIncomingRef.current) {
+            if (msg.from === currentRecipient) { updatePeerLive(currentRecipient, { typing: false }); sendRead(currentRecipient); }
             const decrypted = await decryptIncomingRef.current(msg);
             setMessages((prev) => {
               const next = [...prev, decrypted];
@@ -549,23 +653,14 @@ function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [token, signalDeviceId, appendMessage]);
+  }, [token, signalDeviceId, appendMessage, updatePeerLive]);
 
   // ── recipient selection (from list view) ────────────────────────
-  async function selectRecipient(user: string) {
-    setRecipientPublicKey(null);
-    setRecipientIdentity(null);
+  function selectRecipient(user: string) {
+    setContactKeys(null);
     setMessages([]);
     setReplyTo(null);
     navigate(`/chat/${encodeURIComponent(user)}`);
-    if (!token || !me) return;
-    try {
-      const { rsaKey, identityKey } = await resolveContactKeys(me, user, token);
-      setRecipientPublicKey(rsaKey);
-      setRecipientIdentity(identityKey);
-    } catch (err) {
-      console.error(`No key for ${user}:`, err);
-    }
   }
 
   /**
@@ -610,6 +705,9 @@ function App() {
 
     const text = input;
     const extras: SendExtras = { replyToId: replyTo?.id ?? null };
+    if (typingStopTimerRef.current) clearTimeout(typingStopTimerRef.current);
+    typingSentAtRef.current = 0;
+    sendTyping("stop");
     try {
       if (!(await sendV2(text, extras))) {
         if (!myPublicKey || !recipientPublicKey) return;
@@ -954,6 +1052,7 @@ function App() {
       }
       // Going to the background is a good moment for the (at most daily) backup.
       if (document.hidden && me) maybeAutoBackup(me, token);
+      if (!document.hidden && recipientRef.current) sendRead(recipientRef.current);
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
@@ -1168,11 +1267,14 @@ function App() {
         <ConversationView
           peer={recipient}
           peerProfile={users.find(u => u.username === recipient)}
+          online={peerLive.peer === recipient && peerLive.online}
+          typing={peerLive.peer === recipient && peerLive.typing}
+          peerReadAt={peerLive.peer === recipient ? peerLive.readAt : 0}
           me={me}
           token={token}
           messages={messages}
           input={input}
-          onInputChange={setInput}
+          onInputChange={handleInputChange}
           onSend={send}
           onSendMedia={sendMedia}
           onMarkSnapViewed={markSnapViewed}

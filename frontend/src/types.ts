@@ -30,6 +30,8 @@ export type ChatMessage = {
   viewOnce?: boolean;
   viewedAt?: string | null;
   sentAt: string;
+  // When the recipient opened the conversation (server-tracked, metadata only).
+  readAt?: string | null;
   replyToId?: number | null;
   // 1/undefined = legacy RSA-wrapped (server keeps the ciphertext);
   // 2 = Signal protocol (plaintext only ever exists on devices — see lib/messageStore).

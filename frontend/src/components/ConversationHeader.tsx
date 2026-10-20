@@ -6,6 +6,7 @@ type Props = {
   peer: string;
   peerProfile?: UserProfile;
   online?: boolean;
+  typing?: boolean;
   callState: CallState;
   onBack: () => void;
   onStartVoiceCall: () => void;
@@ -19,6 +20,7 @@ export function ConversationHeader({
   peer,
   peerProfile,
   online,
+  typing,
   callState,
   onBack,
   onStartVoiceCall,
@@ -33,6 +35,8 @@ export function ConversationHeader({
       ? "calling..."
       : callState.kind === "active"
       ? "in call"
+      : typing
+      ? "typing..."
       : online
       ? "online"
       : "";

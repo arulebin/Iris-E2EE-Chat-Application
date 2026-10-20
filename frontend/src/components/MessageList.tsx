@@ -9,6 +9,7 @@ type Props = {
   token: string | null;
   onMarkSnapViewed: (key: string) => void; // key = sender|sentAt|mediaId — uniquely identifies a message
   onStartReply: (msg: ChatMessage) => void;
+  peerReadAt?: number; // epoch ms the peer last read the conversation
 };
 
 function formatTime(iso: string): string {
@@ -35,7 +36,7 @@ function formatDate(iso: string): string {
   }
 }
 
-export function MessageList({ messages, me, token, onMarkSnapViewed, onStartReply }: Props) {
+export function MessageList({ messages, me, token, onMarkSnapViewed, onStartReply, peerReadAt = 0 }: Props) {
   const messagesById = new Map<number, ChatMessage>();
   for (const m of messages) {
     if (m.id != null) messagesById.set(m.id, m);
@@ -103,6 +104,7 @@ export function MessageList({ messages, me, token, onMarkSnapViewed, onStartRepl
                   replyTo={msg.replyToId != null ? messagesById.get(msg.replyToId) ?? null : null}
                   onReply={() => onStartReply(msg)}
                   timestamp={formatTime(msg.sentAt)}
+                  read={isOwn && Date.parse(msg.sentAt) <= peerReadAt}
                 />
               ))}
             </div>
