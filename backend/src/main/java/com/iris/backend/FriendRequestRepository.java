@@ -18,4 +18,8 @@ public interface FriendRequestRepository extends JpaRepository<FriendRequest, Lo
 
     @Query("SELECT fr FROM FriendRequest fr WHERE (fr.fromUser = :user OR fr.toUser = :user) AND fr.status = 'ACCEPTED'")
     List<FriendRequest> findAcceptedByUser(@Param("user") String user);
+
+    @Query("SELECT COUNT(fr) > 0 FROM FriendRequest fr WHERE fr.status = 'ACCEPTED' AND " +
+           "((fr.fromUser = :a AND fr.toUser = :b) OR (fr.fromUser = :b AND fr.toUser = :a))")
+    boolean existsAcceptedBetween(@Param("a") String a, @Param("b") String b);
 }

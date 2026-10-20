@@ -16,13 +16,26 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/media")
 public class MediaController {
 
     private static final long MAX_BYTES = 50L * 1024 * 1024; // 50 MB
+
+    // Profile pictures: raster formats only, stored as prof_<uuid>.<ext>
+    private static final Map<String, String> PROFILE_EXTENSIONS = Map.of(
+            "image/jpeg", "jpg",
+            "image/png",  "png",
+            "image/webp", "webp",
+            "image/gif",  "gif"
+    );
+    private static final Pattern PROFILE_FILENAME = Pattern.compile(
+            "prof_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.(jpg|png|webp|gif)");
 
     @Value("${media.storage-dir:./data/media}")
     private String storageDirProp;
@@ -39,7 +52,7 @@ public class MediaController {
 
     @PostConstruct
     void init() throws IOException {
-        this.storageDir = Paths.get(storageDirProp);
+        this.storageDir = Paths.get(storageDirProp).toAbsolutePath().normalize();
         Files.createDirectories(storageDir);
     }
 
@@ -81,14 +94,14 @@ public class MediaController {
             return ResponseEntity.status(413).build();
         }
 
-        String mimeType = file.getContentType();
-        if (mimeType == null || !mimeType.startsWith("image/")) {
+        // Allowlist: the Content-Type is client-controlled and becomes the file extension,
+        // so anything else could inject path segments or serve active content (SVG).
+        String ext = PROFILE_EXTENSIONS.get(file.getContentType());
+        if (ext == null) {
             return ResponseEntity.badRequest().build();
         }
+        String mimeType = file.getContentType();
 
-        String ext = mimeType.replace("image/", "");
-        if (ext.equals("jpeg")) ext = "jpg";
-        
         String mediaId = "prof_" + UUID.randomUUID().toString();
         Path target = storageDir.resolve(mediaId + "." + ext);
         file.transferTo(target);
@@ -150,28 +163,26 @@ public class MediaController {
                 .body(new ByteArrayResource(plaintext));
     }
 
+    // Requires a valid JWT (not permitAll in SecurityConfig); the frontend fetches with the token.
     @GetMapping("/profile/{filename}")
     public ResponseEntity<Resource> downloadProfilePic(
             @PathVariable String filename
     ) throws IOException {
-        Path file = storageDir.resolve(filename);
-        if (!Files.exists(file) || !filename.startsWith("prof_")) return ResponseEntity.notFound().build();
+        Matcher m = PROFILE_FILENAME.matcher(filename);
+        if (!m.matches()) return ResponseEntity.notFound().build();
+
+        Path file = storageDir.resolve(filename).normalize();
+        if (!file.startsWith(storageDir) || !Files.exists(file)) return ResponseEntity.notFound().build();
 
         byte[] plaintext = Files.readAllBytes(file);
-        
-        String mimeType = "image/" + filename.substring(filename.lastIndexOf('.') + 1);
-        if (mimeType.equals("image/jpg")) mimeType = "image/jpeg";
-        MediaType type;
-        try {
-            type = MediaType.parseMediaType(mimeType);
-        } catch (Exception e) {
-            type = MediaType.APPLICATION_OCTET_STREAM;
-        }
+
+        String mimeType = m.group(1).equals("jpg") ? "image/jpeg" : "image/" + m.group(1);
 
         return ResponseEntity.ok()
-                .contentType(type)
+                .contentType(MediaType.parseMediaType(mimeType))
                 .contentLength(plaintext.length)
-                .header(HttpHeaders.CACHE_CONTROL, "public, max-age=86400")
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=86400")
+                .header("X-Content-Type-Options", "nosniff")
                 .body(new ByteArrayResource(plaintext));
     }
 

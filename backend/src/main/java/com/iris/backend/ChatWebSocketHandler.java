@@ -24,6 +24,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private final ObjectMapper objectMapper;
     private final PushNotificationService pushNotificationService;
     private final UserStatusService userStatusService;
+    private final FriendRequestRepository friendRequestRepository;
 
     // username → that user's open sessions (could be multiple tabs)
     private final Map<String, Set<WebSocketSession>> sessionsByUser = new ConcurrentHashMap<>();
@@ -32,12 +33,20 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             MessageRepository messageRepository,
             ObjectMapper objectMapper,
             PushNotificationService pushNotificationService,
-            UserStatusService userStatusService
+            UserStatusService userStatusService,
+            FriendRequestRepository friendRequestRepository
     ) {
         this.messageRepository = messageRepository;
         this.objectMapper = objectMapper;
         this.pushNotificationService = pushNotificationService;
         this.userStatusService = userStatusService;
+        this.friendRequestRepository = friendRequestRepository;
+    }
+
+    // Only accepted friends may message, call, or see each other's typing/read state.
+    private boolean areFriends(String a, String b) {
+        if (a == null || b == null || a.equals(b)) return false;
+        return friendRequestRepository.existsAcceptedBetween(a, b);
     }
 
     @Override
@@ -79,6 +88,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         if ("typing".equals(type)) {
             if (!root.has("to")) return;
             String to = root.get("to").asText();
+            if (!areFriends(sender, to)) return;
             ObjectNode forwarded = objectMapper.createObjectNode();
             forwarded.put("type", "typing");
             forwarded.put("from", sender);
@@ -91,6 +101,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             // sender has read messages from `from`
             if (!root.has("from")) return;
             String from = root.get("from").asText();
+            if (!areFriends(sender, from)) return;
             int updated = messageRepository.markRead(from, sender, Instant.now());
             if (updated > 0) {
                 ObjectNode receipt = objectMapper.createObjectNode();
@@ -104,6 +115,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         if (type.startsWith("call-")) {
             if (!root.has("to")) return;
             String to = root.get("to").asText();
+            if (!areFriends(sender, to)) return;
             ObjectNode forwarded = ((ObjectNode) root).put("from", sender);
             if ("call-offer".equals(type)) {
                 sendToOneSession(to, forwarded.toString());
@@ -112,7 +124,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                     .anyMatch(s -> s.isOpen()
                         && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE)));
                 if (!recipientActive) {
-                    pushNotificationService.sendToUser(to, "Incoming call", "Call from " + sender);
+                    // Generic text: push payloads pass through the browser vendor's push service.
+                    pushNotificationService.sendToUser(to, "Iris", "Incoming call");
                 }
             } else {
                 sendToUser(to, forwarded.toString());
@@ -124,6 +137,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         IncomingMessage incoming = objectMapper.treeToValue(root, IncomingMessage.class);
 
         if (incoming.to() == null || incoming.to().isBlank()) return;
+        if (!areFriends(sender, incoming.to())) return;
         boolean hasText = incoming.content() != null && !incoming.content().isBlank();
         boolean hasMedia = incoming.mediaId() != null && !incoming.mediaId().isBlank();
         if (!hasText && !hasMedia) return;
@@ -151,7 +165,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             .anyMatch(s -> s.isOpen()
                 && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE)));
         if (!recipientActive) {
-            pushNotificationService.sendToUser(incoming.to(), "Iris", "New message from " + sender);
+            // Generic text: push payloads pass through the browser vendor's push service.
+            pushNotificationService.sendToUser(incoming.to(), "Iris", "New message");
         }
     }
 

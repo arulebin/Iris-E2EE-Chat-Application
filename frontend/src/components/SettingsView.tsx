@@ -3,6 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { BackIcon, BellIcon, LogoutIcon } from "./icons";
 import { Avatar } from "./Avatar";
 import { getThemePref, setThemePref, type ThemePref } from "../lib/theme";
+import { useProfileImage } from "../lib/profileImage";
 
 type Props = {
   me: string | null;
@@ -34,6 +35,7 @@ export function SettingsView({
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [themePref, setLocalTheme] = useState<ThemePref>(getThemePref());
+  const qrAvatarSrc = useProfileImage(meProfile?.avatarUrl);
 
   const changeTheme = (p: ThemePref) => { setLocalTheme(p); setThemePref(p); };
 
@@ -148,8 +150,8 @@ export function SettingsView({
                 value={inviteUrl} 
                 size={180} 
                 fgColor="#5b5bd6"
-                imageSettings={meProfile?.avatarUrl ? {
-                  src: `/api/media/profile/${meProfile.avatarUrl}`,
+                imageSettings={qrAvatarSrc ? {
+                  src: qrAvatarSrc,
                   height: 48,
                   width: 48,
                   excavate: true

@@ -22,6 +22,9 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
 
+    @Value("${spring.h2.console.enabled:false}")
+    private boolean h2ConsoleEnabled;
+
     @Value("${cors.allowed-origins:http://localhost:5173,http://localhost:8080,https://iris-chat-web.vercel.app}")
     private String[] allowedOrigins;
 
@@ -59,19 +62,24 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
 
             // who can hit what
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/auth/**").permitAll()           // signup + login: open
-                .requestMatchers("/error").permitAll()
-                .requestMatchers("/h2-console/**").permitAll()     // dev DB browser: open
-                .requestMatchers("/ws/**").permitAll()             // WebSocket — we'll lock down in 6.5 half B
-                .anyRequest().authenticated()                      // everything else: must have a valid token
-            )
+            .authorizeHttpRequests(auth -> {
+                auth.requestMatchers("/auth/**").permitAll()       // signup + login: open
+                    .requestMatchers("/error").permitAll();
+                // dev DB browser: only reachable when explicitly enabled (H2_CONSOLE_ENABLED=true)
+                if (h2ConsoleEnabled) auth.requestMatchers("/h2-console/**").permitAll();
+                // WebSocket: the token travels as ?token=, which the JWT filter doesn't read,
+                // so JwtHandshakeInterceptor authenticates and rejects the upgrade instead.
+                auth.requestMatchers("/ws/**").permitAll()
+                    .anyRequest().authenticated();                 // everything else: must have a valid token
+            })
 
             // no server-side session — every request reauthenticated by JWT
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
-            // h2-console uses iframes — without this, X-Frame-Options blocks it
-            .headers(h -> h.frameOptions(f -> f.sameOrigin()))
+            // h2-console uses iframes, so relax X-Frame-Options only when it's enabled
+            .headers(h -> h.frameOptions(f -> {
+                if (h2ConsoleEnabled) f.sameOrigin(); else f.deny();
+            }))
 
             .exceptionHandling(e -> e
             .authenticationEntryPoint((req, res, ex) -> {

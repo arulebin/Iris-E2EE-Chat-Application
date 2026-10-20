@@ -1,3 +1,5 @@
+import { useProfileImage } from "../lib/profileImage";
+
 type Props = {
   name: string;
   avatarUrl?: string;
@@ -30,13 +32,14 @@ function colorForName(name: string): string {
 
 export function Avatar({ name, avatarUrl, online = false, size = "md" }: Props) {
   const initial = (name[0] ?? "?").toUpperCase();
+  const src = useProfileImage(avatarUrl);
   return (
     <div className="relative inline-block shrink-0">
       <div
-        className={`${SIZE_CLASSES[size]} ${avatarUrl ? 'bg-transparent' : colorForName(name)} rounded-full flex items-center justify-center text-white font-bold overflow-hidden`}
+        className={`${SIZE_CLASSES[size]} ${src ? 'bg-transparent' : colorForName(name)} rounded-full flex items-center justify-center text-white font-bold overflow-hidden`}
       >
-        {avatarUrl ? (
-          <img src={avatarUrl.startsWith('http') ? avatarUrl : `/api/media/profile/${avatarUrl}`} alt={name} className="w-full h-full object-cover" />
+        {src ? (
+          <img src={src} alt={name} className="w-full h-full object-cover" />
         ) : (
           initial
         )}
