@@ -48,7 +48,8 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "allowBackup": false,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.CAMERA",
@@ -90,6 +91,7 @@
             "buildArchs": [
               "arm64-v8a"
             ],
+            "useLegacyPackaging": true,
             "extraProguardRules": "-keep class org.webrtc.** { *; }\n-keep class org.jni_zero.** { *; }\n-dontwarn org.webrtc.Dav1dDecoder$Natives\n-dontwarn org.jni_zero.**\n-keep class com.iris.notify.** { *; }\n-keep class com.iris.calls.IrisFirebaseMessagingService { *; }"
           }
         }
@@ -113,7 +115,8 @@
       "@config-plugins/react-native-webrtc",
       "./modules/iris-calls/plugin",
       "./plugins/withDevNetworkSecurity",
-      "./plugins/withBackToBackground"
+      "./plugins/withBackToBackground",
+      "./plugins/withNoAndroidBackup"
     ],
     "experiments": {
       "typedRoutes": true
