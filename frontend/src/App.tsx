@@ -17,6 +17,7 @@ import type { CallSignal } from "./webrtc";
 import type { ChatMessage, UserProfile, FriendRequest } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { logIn, signUp, unlockKeyMaterial } from "./lib/credentials";
+import { setEscrowSessionMaster } from "./lib/appLockEscrow";
 import { uploadMedia, buildMediaEnvelope, parseMediaEnvelope } from "./lib/media";
 import { apiBase, wsURL } from "./lib/config";
 import {
@@ -170,6 +171,11 @@ function App() {
 
   const me = getUsername(token);
 
+  // Hand the password-derived secret to the App-lock escrow (kept across lock/unlock; cleared on logout).
+  useEffect(() => {
+    if (me && keyMaterial) setEscrowSessionMaster(me, keyMaterial);
+  }, [me, keyMaterial]);
+
   // ── groups ───────────────────────────────────────────────────────
   const { groups, previews: groupPreviews, setGroups } = useGroups(token, me);
   const openGroup = openGroupId ? groups.find((g) => g.id === openGroupId) ?? null : null;
@@ -235,6 +241,7 @@ function App() {
   // Local teardown shared by logout and "session expired" (lib/api already cleared
   // the stored tokens in that case).
   function resetSession() {
+    setEscrowSessionMaster(null, null);
     setToken(null);
     setMessages([]);
     setUsers([]);
