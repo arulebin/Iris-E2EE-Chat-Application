@@ -26,3 +26,6 @@ SUMMARY.md
 .claude/
 !.env.*.example
 local.properties
+mobile/google-services.json
+mobile/modules/*/android/build/
+mobile/modules/*/android/.cxx/

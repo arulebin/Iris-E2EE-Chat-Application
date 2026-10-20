@@ -211,9 +211,74 @@ Each phase ends with a shippable, reviewable state and explicit acceptance crite
 | Monorepo hoisting (React 19.2 vs 19.3) | Duplicate React, Metro errors | Keep frontend out until phase 2; per-workspace React resolution |
 | Windows path length / Gradle on JDK 26 | Build failures | Use Android Studio JBR (JDK 21); build from a short path in CI |
 
-## 7. Status and TODOs
+## 7. Status
 
-- `npx expo prebuild --platform android` succeeded (package `com.iris.chat.mobile`).
-- TODO: `./gradlew assembleDebug` in `mobile/android` was still running when this foundation was handed off (first run downloads NDK 27.1 and Android SDK Platform 37; build with Android Studio's JBR, JDK 21, because JDK 26 is unsupported; `local.properties` with `sdk.dir` is gitignored). Record the result here once finished.
-- TODO: run the Diagnostics screen on a device and record the PBKDF2 600k and safety-number timings (phase 1 gate).
-- TODO: `frontend/` joins the workspaces in phase 2.
+### Android build (Phase 0, done)
+
+`./gradlew assembleDebug` in `mobile/android` produces `app-debug.apk` (package `com.iris.chat.mobile`, arm64-v8a only for dev,
+about 105 MB) and installs next to the Capacitor app. Windows notes:
+
+- Use Android Studio's JBR (JDK 21) as `JAVA_HOME`; `local.properties` (gitignored) holds `sdk.dir`.
+- CMake object paths for react-native-gesture-handler, screens, worklets and nitro exceed 260 characters even from a short
+  checkout (the relative path alone is about 274), and CMake 3.22.1's bundled ninja 1.10.2 refuses them
+  ("Filename longer than 260 characters"). With the OS setting LongPathsEnabled=1, replacing ninja by 1.13.2 fixes it:
+  copy `Sdk/cmake/3.22.1` to a private dir, drop a newer `ninja.exe` into its `bin`, and set `cmake.dir=` in `local.properties`.
+  No short-path copy or `subst` is needed (`subst` breaks the codegen, which mixes `X:` and realpath `D:` roots).
+- `org.gradle.configuration-cache=false` in `mobile/android/gradle.properties`: the Expo/RN gradle scripts spawn `node`
+  during configuration, which fails the build under the configuration cache.
+- `mobile/vitest.config.mts` and the `.json` suffix in `tsconfig.json`'s `extends` exist because Vite cannot resolve `expo/tsconfig.base`.
+
+### Phase 1 gate: on-device results (Redmi Note 7 Pro, Snapdragon 675, Android 16, Hermes, dev bundle)
+
+Run with `iris://bench?autorun=1` (screen `mobile/app/bench.tsx`, code `mobile/src/platform/bench.ts`; rows are logged to logcat
+as `IRIS_BENCH {json}`). Single warm runs; the Metro dev bundle is slower than a release build.
+
+| Measurement | Result | Gate | |
+| --- | --- | --- | --- |
+| Login derivation: PBKDF2-SHA256 600k + HKDF `iris-auth-v2` (native) | 154 to 193 ms | < 1500 ms | pass |
+| Safety number (2 x 5200 SHA-512 rounds, native digest per round) | 740 to 790 ms | < 2000 ms | pass |
+| AES-GCM 1 KiB enc+dec x50 | 23 to 28 ms | | |
+| AES-GCM 10 MiB encrypt / decrypt | 17 ms / 25 to 43 ms | | |
+| HKDF x50 / HMAC 1 KiB x50 | 6 ms / 13 ms | | |
+| libsignal asm.js: generateKeyPair | 264 to 272 ms | < 300 ms | pass (barely) |
+| libsignal asm.js: XEdDSA sign | 368 to 377 ms | < 300 ms | FAIL |
+| libsignal asm.js: XEdDSA verify | 256 to 262 ms | < 300 ms | pass (barely) |
+| libsignal asm.js: X25519 agree | 268 to 273 ms | < 300 ms | pass (barely) |
+| asm.js: 2 identities + signed prekey + prekey | 1.9 s | | too slow |
+| asm.js: X3DH processPreKey / full X3DH + ratchet roundtrip | 2.2 s / 2.8 s | | too slow |
+| asm.js: ratchet steady state, 10 messages enc+dec | 0.86 s | | |
+| **noble:** generateKeyPair / sign / verify / agree | 9 / 21 / 58 / 40 ms | < 300 ms | pass |
+| **noble:** 2 identities + prekeys / processPreKey / roundtrip | 88 / 264 / 339 ms | | |
+| **noble:** ratchet steady state, 10 messages | 132 ms | | |
+
+Verdict: native PBKDF2 is about 8x under the gate (the pure-JS estimate of 10 to 40 s is irrelevant). libsignal's asm.js
+curve fails the sign gate and makes first-message session setup take seconds, so the fallback is implemented and is the default.
+
+### Fallback implemented: XEdDSA/X25519 on `@noble/curves`
+
+`packages/core/src/crypto/nobleCurve.ts` (`createNobleAsyncCurve`), injected with libsignal's `setCurve` by
+`mobile/src/platform/libsignal.ts` (`installLibsignal(provider)`, which also does `setWebCrypto`). It reproduces libsignal-protocol-c's
+`curve25519_sign/verify` including the sign bit stored in `sig[63]` and the inverted `verify` result.
+`nobleCurve.test.ts` cross-checks 20 key pairs, agreements and 60 signatures both ways against the asm.js build, both sign-bit values,
+plus tamper cases. Result on device: 13 to 18x faster per op, session setup 0.26 s instead of 2.2 s.
+
+### Platform adapters (`mobile/src/platform`, native modules in `mobile/modules`)
+
+| Adapter | Implementation | Verified |
+| --- | --- | --- |
+| `KeyWrapper` | `iris-keystore` Expo module (Kotlin): AES-256-GCM in AndroidKeyStore, StrongBox with TEE fallback, per-alias, `wrap/unwrap/reset`, `KEY_MISSING` | on device: roundtrip (60 B blob, level `tee`: the Redmi has no StrongBox), reset gives `KeystoreKeyMissingError` |
+| App-lock key | same module: auth-bound key (strong biometric or screen lock, timeout window, invalidated by enrollment), `BiometricPrompt` via androidx.biometric; errors `AUTH_REQUIRED`, `KEY_INVALIDATED`, `CANCELED`, `LOCKOUT`; `layerWrappers` stacks it over the Keystore wrapper | compiled; creating the key fails on this phone because no secure lock screen is set (expected); lock UI is later |
+| `KV` | `MmkvKV` over react-native-mmkv; `openEncryptedKV` generates a 16 char MMKV key (MMKV's AES key is at most 16 bytes) stored only wrapped by the KeyWrapper in a small boot instance | on device: persists and reopens |
+| `TokenStore` | access + refresh tokens stored only as Keystore-wrapped blobs; lost key means signed out | on device: no plaintext in storage |
+| `Transport` | core `createAuthedFetch` (refresh semantics of `frontend/src/lib/api.ts`: single flight, proactive refresh under 60 s, 409 retry, only a definitive 401 from `/auth/refresh` signs out) and core `createRealtime` (25 s ping, 10 s pong timeout once the server has answered, backoff 1 to 30 s, forced token refresh after 2 failed handshakes, wake on foreground / network back) wired to `AppState` and NetInfo | unit tests (fake sockets, fake timers); not yet against the live socket |
+| FLAG_SECURE | `iris-screen-security` module, on by default (reapplied whenever the activity enters the foreground), `setScreenSecure(false)` to toggle. Note: it also blocks `adb screencap` | on device: default on |
+| Push | expo-notifications; `createPush` creates channels `messages`/`calls`, registers the raw FCM token with `POST /api/push/fcm-token`, `DELETE` on logout, re-registers on rotation. Firebase app `com.iris.chat.mobile` (id `1:156258039756:android:879b74afe431d424a20f69`) added to project iris-chat-404d; `mobile/google-services.json` is gitignored | on device: FCM token obtained; registration with the backend needs a login and was not exercised |
+
+Tests: `npm test -w @iris/core` (28), `npm test -w @iris/crypto-conformance` (45), `npm test -w @iris/mobile` (14); `tsc --noEmit` is clean in all three.
+
+### Open items
+
+- Phase 2/3: wire `createPlatform()` (in `platform/index.ts`) into the auth flow; at-rest AES-GCM layer for the Signal store on top of encrypted MMKV.
+- Push: expo-notifications ships its own `FirebaseMessagingService`; data-only call pushes (`IrisCallPush.handle`, see the calls branch) need a service that delegates to it.
+- Re-run the benchmark on a release build and on a low-end device; the numbers above are dev-bundle.
+- `frontend/` joins the workspaces in phase 2.

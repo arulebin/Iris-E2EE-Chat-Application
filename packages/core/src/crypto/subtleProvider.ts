@@ -37,7 +37,12 @@ export function createSubtleProvider(o: SubtleProviderOptions): CryptoProvider {
 
   return {
     name: o.name,
-    randomBytes: n => o.getRandomValues(new Uint8Array(n)),
+    // WebCrypto caps getRandomValues at 65,536 bytes per call (RN throws QuotaExceededError).
+    randomBytes: n => {
+      const out = new Uint8Array(n)
+      for (let i = 0; i < n; i += 65536) o.getRandomValues(out.subarray(i, Math.min(n, i + 65536)))
+      return out
+    },
     digest: async (h, d) => u8(await subtle.digest(h, d)),
     hmac: async (h: HashName, key, data) => {
       const k = await subtle.importKey('raw', key, { name: 'HMAC', hash: h }, false, ['sign'])
