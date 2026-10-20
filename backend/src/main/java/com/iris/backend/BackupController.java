@@ -48,14 +48,27 @@ public class BackupController {
         return backupDir.resolve(id + ".bin");
     }
 
+    // Non-secret identifier of the recovery key the current backup was made with
+    // (a hash the client derives from it). Lets a device notice that another device
+    // switched to a new recovery key instead of silently overwriting its backup.
+    private Path keyIdFileFor(Path backupFile) {
+        return backupFile.resolveSibling(backupFile.getFileName().toString().replace(".bin", ".keyid"));
+    }
+
+    private static boolean validKeyId(String keyId) {
+        return keyId != null && keyId.matches("[0-9a-f]{16,64}");
+    }
+
     @GetMapping("/meta")
     public Map<String, Object> meta(Authentication auth) throws IOException {
         Path file = fileFor(auth);
         if (!Files.exists(file)) return Map.of("exists", false);
+        Path keyIdFile = keyIdFileFor(file);
         return Map.of(
             "exists", true,
             "size", Files.size(file),
-            "updatedAt", Files.getLastModifiedTime(file).toInstant().toString()
+            "updatedAt", Files.getLastModifiedTime(file).toInstant().toString(),
+            "keyId", Files.exists(keyIdFile) ? Files.readString(keyIdFile) : ""
         );
     }
 
@@ -73,7 +86,9 @@ public class BackupController {
 
     @PutMapping(consumes = MediaType.APPLICATION_OCTET_STREAM_VALUE)
     public ResponseEntity<Object> upload(@RequestHeader(value = HttpHeaders.CONTENT_LENGTH, required = false) Long declared,
+                                         @RequestHeader(value = "X-Backup-Key-Id", required = false) String keyId,
                                          @RequestBody byte[] body, Authentication auth) throws IOException {
+        if (!validKeyId(keyId)) return ResponseEntity.badRequest().body(Map.of("error", "missing key id"));
         // nginx caps bodies at 51 MB; this is the application-level limit.
         if (declared != null && declared > MAX_BACKUP_BYTES) return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
         if (body == null || body.length == 0) return ResponseEntity.badRequest().build();
@@ -88,12 +103,15 @@ public class BackupController {
         } finally {
             Files.deleteIfExists(tmp);
         }
+        Files.writeString(keyIdFileFor(target), keyId);
         return ResponseEntity.ok(Map.of("updatedAt", Files.getLastModifiedTime(target).toInstant().toString()));
     }
 
     @DeleteMapping
     public ResponseEntity<Void> delete(Authentication auth) throws IOException {
-        Files.deleteIfExists(fileFor(auth));
+        Path file = fileFor(auth);
+        Files.deleteIfExists(file);
+        Files.deleteIfExists(keyIdFileFor(file));
         return ResponseEntity.noContent().build();
     }
 }

@@ -16,6 +16,8 @@ type Props = {
   onLogout: () => void;
   onUpdateProfile: (name: string, file: File | null) => Promise<void>;
   shareId?: string;
+  /** Extra self-contained sections (backup, devices), rendered above Log out. */
+  children?: React.ReactNode;
 };
 
 export function SettingsView({
@@ -29,6 +31,7 @@ export function SettingsView({
   onLogout,
   onUpdateProfile,
   shareId,
+  children,
 }: Props) {
   const [preferredName, setPreferredName] = useState(meProfile?.preferredName || "");
   const [file, setFile] = useState<File | null>(null);
@@ -198,6 +201,8 @@ export function SettingsView({
             )}
           </div>
         </section>
+
+        {children}
 
         <button
           onClick={onLogout}

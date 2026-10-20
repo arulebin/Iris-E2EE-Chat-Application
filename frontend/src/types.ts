@@ -31,6 +31,12 @@ export type ChatMessage = {
   viewedAt?: string | null;
   sentAt: string;
   replyToId?: number | null;
+  // 1/undefined = legacy RSA-wrapped (server keeps the ciphertext);
+  // 2 = Signal protocol (plaintext only ever exists on devices — see lib/messageStore).
+  v?: number;
+  senderDeviceId?: number | null;
+  // Client-only: local id for a v2 message until the server assigns `id`.
+  clientId?: string | null;
 };
 
 export type CallMode = 'audio' | 'video';

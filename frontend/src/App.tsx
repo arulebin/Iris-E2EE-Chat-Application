@@ -6,7 +6,12 @@ import {
   encryptMessage,
   decryptMessage,
 } from "./crypto";
-import { fetchPinnedPublicKey, isSendBlocked } from "./lib/fingerprint";
+import { isSendBlocked, noteIdentitySeen, resolveContactKeys } from "./lib/fingerprint";
+import { initSignal } from "./lib/signal/device";
+import { SignalClient, type SendExtras, type V2Meta } from "./lib/signal/client";
+import { NotV2Error } from "./lib/signal/messaging";
+import { getMessages, isEmpty as v2HistoryEmpty, mergeHistory, patchMessage } from "./lib/messageStore";
+import { fetchBackupMeta, isRestoreDismissed, maybeAutoBackup } from "./lib/backup";
 import { enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
 import { playRingback, playRingtone, stopTone } from "./lib/sound";
@@ -26,6 +31,9 @@ import { IncomingCallModal } from "./components/IncomingCallModal";
 import { CallNoticeBanner } from "./components/CallNoticeBanner";
 import { VideoCallScreen } from "./components/VideoCallScreen";
 import { UnlockKeyView } from "./components/UnlockKeyView";
+import { BackupSettings } from "./components/BackupSettings";
+import { DevicesSettings } from "./components/DevicesSettings";
+import { RestoreBackupPrompt } from "./components/RestoreBackupPrompt";
 
 // Shown in place of a message we can't open with the current key. Kept as a
 // constant so the cache layer can recognise (and refuse to persist) failures.
@@ -70,6 +78,16 @@ function App() {
   // private-key backup. Never persisted and never sent to the server.
   const [keyMaterial, setKeyMaterial] = useState<CryptoKey | null>(null);
 
+  // ── Signal-protocol state (v2, forward-secret messaging) ────────
+  // The client lives in a ref (it's read by the long-lived WS handler); the device
+  // id is state so the socket reconnects as that device once it's registered.
+  const signalRef = useRef<SignalClient | null>(null);
+  const [signalDeviceId, setSignalDeviceId] = useState<number | null>(null);
+  const [recipientIdentity, setRecipientIdentity] = useState<ArrayBuffer | null>(null);
+  const [offerRestore, setOfferRestore] = useState(false);
+  // Bumped after a backup restore so the open conversation reloads local history.
+  const [historyVersion, setHistoryVersion] = useState(0);
+
   // ── push / brave state ──────────────────────────────────────────
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
@@ -110,6 +128,7 @@ function App() {
   const recipientRef = useRef<string>("");
   const decryptIncomingRef = useRef<((m: ChatMessage) => Promise<ChatMessage>) | null>(null);
   const meRef = useRef<string | null>(null);
+  const handleDeviceRevokedRef = useRef<(() => Promise<void>) | null>(null);
 
   const me = getUsername(token);
 
@@ -165,11 +184,30 @@ function App() {
     setPrivateKey(null);
     setMyPublicKey(null);
     setRecipientPublicKey(null);
+    setRecipientIdentity(null);
     setKeyMaterial(null);
     setNeedsKeyPassword(false);
     setKeyError(null);
+    signalRef.current?.dispose();
+    signalRef.current = null;
+    setSignalDeviceId(null);
+    setOfferRestore(false);
     navigate("/");
     wsRef.current?.close();
+  }
+
+  // This device was removed from the account (on another device). Forget its
+  // Signal state — including the identity copy — so setting it up again needs
+  // the password, not just the still-valid login token.
+  async function handleDeviceRevoked() {
+    const client = signalRef.current;
+    signalRef.current = null;
+    client?.dispose();
+    await client?.ctx.store.wipe();
+    setSignalDeviceId(null);
+    setKeyMaterial(null);
+    setKeyError("This device was removed from your account. Enter your password to set it up again.");
+    setNeedsKeyPassword(true);
   }
 
   async function handleEnableNotifications() {
@@ -238,6 +276,38 @@ function App() {
     return () => { cancelled = true; };
   }, [token, me, keyMaterial]);
 
+  // Signal device setup, after the legacy key (it cross-signs the new identity).
+  // Re-runs on unlock (keyMaterial) — cheap when the device is already set up.
+  useEffect(() => {
+    if (!token || !me || !privateKey) return;
+    let cancelled = false;
+    initSignal(me, keyMaterial, token)
+      .then(async (ctx) => {
+        if (cancelled) return;
+        // Identity keys seen in incoming sessions go through the same pin check.
+        ctx.store.onIdentity((contact, key) => noteIdentitySeen(me, contact, key, token).catch(console.error));
+        signalRef.current?.dispose();
+        signalRef.current = new SignalClient(ctx, token, () => wsRef.current);
+        setSignalDeviceId(ctx.deviceId);
+        maybeAutoBackup(me, token);
+        // New device with empty history and a backup on the server → offer a restore.
+        if (ctx.freshDevice && (await v2HistoryEmpty(me)) && !(await isRestoreDismissed(me))) {
+          const meta = await fetchBackupMeta(token).catch(() => null);
+          if (!cancelled && meta?.exists) setOfferRestore(true);
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (/Password required/.test(String(err?.message ?? err))) {
+          setNeedsKeyPassword(true);
+        } else {
+          // Not fatal: this device keeps working with legacy (v1) encryption.
+          console.error("Secure-messaging setup failed; using legacy encryption", err);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [token, me, privateKey, keyMaterial]);
+
   useEffect(() => {
     if (!token) return;
 
@@ -280,12 +350,16 @@ function App() {
               prev.find(u => u.username === profile.username) ? prev : [profile, ...prev]
             );
             setRecipientPublicKey(null);
+            setRecipientIdentity(null);
             setMessages([]);
             setReplyTo(null);
             navigate(`/chat/${encodeURIComponent(profile.username)}`, { replace: true });
             if (me) {
-              fetchPinnedPublicKey(me, profile.username, token!)
-                .then(({ key }) => setRecipientPublicKey(key))
+              resolveContactKeys(me, profile.username, token!)
+                .then(({ rsaKey, identityKey }) => {
+                  setRecipientPublicKey(rsaKey);
+                  setRecipientIdentity(identityKey);
+                })
                 .catch(console.error);
             }
           } else {
@@ -307,7 +381,8 @@ function App() {
   // ── decrypt one incoming/historical message ─────────────────────
   const decryptIncoming = useCallback(
     async (msg: ChatMessage): Promise<ChatMessage> => {
-      if (!privateKey) return msg;
+      // v2 rows are metadata only; their content comes from local history.
+      if (!privateKey || msg.v === 2) return msg;
       const encryptedKey =
         msg.from === me ? msg.encryptedKeyForSender : msg.encryptedKeyForRecipient;
       if (!encryptedKey) return msg;
@@ -333,9 +408,13 @@ function App() {
     if (!token || !recipient.trim() || !privateKey || !me) return;
 
     const cacheKey = `chat_history_${me}_${recipient}`;
-    get<ChatMessage[]>(cacheKey).then((cached) => {
-      if (cached && cached.length > 0) {
-        setMessages((prev) => prev.length === 0 ? cached : prev);
+    let cancelled = false;
+    // Offline-first: the display cache (legacy) merged with local v2 history,
+    // which is authoritative for forward-secret messages.
+    Promise.all([get<ChatMessage[]>(cacheKey), getMessages(me, recipient)]).then(([cached, localV2]) => {
+      const local = mergeHistory((cached ?? []).filter((m) => m.v !== 2), localV2);
+      if (!cancelled && local.length > 0) {
+        setMessages((prev) => prev.length === 0 ? local : prev);
       }
     }).catch(console.error);
 
@@ -345,21 +424,35 @@ function App() {
       .then((res) => (res.ok ? res.json() : []))
       .then(async (history: ChatMessage[]) => {
         const decrypted = await Promise.all(history.map(decryptIncoming));
-        setMessages(decrypted);
+        const merged = mergeHistory(decrypted, await getMessages(me, recipient));
+        if (cancelled) return;
+        setMessages(merged);
         // Don't poison the cache with decrypt failures — otherwise broken bubbles
         // persist and reappear even after the key is fixed. Only cache clean decrypts.
-        if (!decrypted.some((m) => m.content === UNDECRYPTABLE)) {
-          set(cacheKey, decrypted).catch(console.error);
+        const legacy = decrypted.filter((m) => m.v !== 2);
+        if (!legacy.some((m) => m.content === UNDECRYPTABLE)) {
+          set(cacheKey, legacy).catch(console.error);
         }
       })
       .catch(() => { /* serve via offline cache silently */ });
-  }, [token, recipient, privateKey, decryptIncoming, me]);
+    return () => { cancelled = true; };
+  }, [token, recipient, privateKey, decryptIncoming, me, historyVersion]);
+
+  // Add (or update in place) one message in the open conversation.
+  const appendMessage = useCallback((message: ChatMessage) => {
+    setMessages((prev) => {
+      const i = prev.findIndex((m) =>
+        (message.id != null && m.id === message.id) || (!!message.clientId && m.clientId === message.clientId));
+      return i < 0 ? [...prev, message] : prev.map((m, j) => (j === i ? message : m));
+    });
+  }, []);
 
   // Sync refs read by ws.onmessage
   useEffect(() => {
     recipientRef.current = recipient;
     decryptIncomingRef.current = decryptIncoming;
     meRef.current = me;
+    handleDeviceRevokedRef.current = handleDeviceRevoked;
   });
 
   // WebSocket lifecycle: connects on login, reconnects with exponential backoff on drop
@@ -372,7 +465,9 @@ function App() {
 
     function connect() {
       if (destroyed) return;
-      const ws = new WebSocket(wsURL(`/ws/chat?token=${token}`));
+      // Connecting AS a Signal device lets the server route per-device envelopes here.
+      const device = signalDeviceId ? `&device=${signalDeviceId}` : "";
+      const ws = new WebSocket(wsURL(`/ws/chat?token=${token}${device}`));
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -381,6 +476,8 @@ function App() {
           type: "visibility",
           state: document.hidden ? "hidden" : "visible",
         }));
+        // Pull envelopes queued while this device was offline.
+        if (signalDeviceId) ws.send(JSON.stringify({ type: "sync" }));
       };
 
       ws.onmessage = async (e) => {
@@ -388,6 +485,20 @@ function App() {
           const data = JSON.parse(e.data);
           if (data && typeof data.type === "string" && data.type.startsWith("call-")) {
             await handleSignalRef.current?.(data as CallSignal);
+            return;
+          }
+          if (signalRef.current?.handleReply(data)) return;
+          if (data?.type === "device-revoked") {
+            await handleDeviceRevokedRef.current?.();
+            return;
+          }
+          if (data?.type === "envelope") {
+            const client = signalRef.current;
+            if (!client) return; // not acked → redelivered on the next sync
+            const { peer, message } = await client.open(data as { envType: number; body: string; message: V2Meta });
+            // Persisted before the ack, so a crash can't lose a forward-secret message.
+            ws.send(JSON.stringify({ type: "ack", ids: [data.envelopeId] }));
+            if (peer === recipientRef.current) appendMessage(message);
             return;
           }
           const msg = data as ChatMessage;
@@ -431,46 +542,76 @@ function App() {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [token]);
+  }, [token, signalDeviceId, appendMessage]);
 
   // ── recipient selection (from list view) ────────────────────────
   async function selectRecipient(user: string) {
     setRecipientPublicKey(null);
+    setRecipientIdentity(null);
     setMessages([]);
     setReplyTo(null);
     navigate(`/chat/${encodeURIComponent(user)}`);
     if (!token || !me) return;
     try {
-      const { key } = await fetchPinnedPublicKey(me, user, token);
-      setRecipientPublicKey(key);
+      const { rsaKey, identityKey } = await resolveContactKeys(me, user, token);
+      setRecipientPublicKey(rsaKey);
+      setRecipientIdentity(identityKey);
     } catch (err) {
       console.error(`No key for ${user}:`, err);
     }
   }
 
+  /**
+   * Try the forward-secret (v2) path. Returns the sent message, or null when the
+   * recipient has no Signal devices (or this device isn't set up yet) and the
+   * caller should fall back to a legacy send.
+   * TODO(remove-legacy): once every client is v2, make this the only path.
+   */
+  async function sendV2(plaintext: string, extras: SendExtras): Promise<ChatMessage | null> {
+    const client = signalRef.current;
+    if (!client || !recipientIdentity) return null;
+    try {
+      const sent = await client.send(recipient, recipientIdentity, plaintext, extras);
+      appendMessage(sent);
+      return sent;
+    } catch (err) {
+      if (err instanceof NotV2Error) return null;
+      throw err;
+    }
+  }
+
+  // Legacy (v1): AES key RSA-wrapped for both accounts. Still E2E, no forward secrecy.
+  function sendLegacy(enc: Awaited<ReturnType<typeof encryptMessage>>, extras: SendExtras) {
+    if (wsRef.current?.readyState !== WebSocket.OPEN) throw new Error("Not connected");
+    wsRef.current.send(
+      JSON.stringify({
+        to: recipient,
+        content: enc.ciphertext,
+        encryptedKeyForSender: enc.encryptedKeyForSender,
+        encryptedKeyForRecipient: enc.encryptedKeyForRecipient,
+        ...extras,
+      }),
+    );
+  }
+
   // ── send chat message ───────────────────────────────────────────
   async function send() {
     if (input.trim() === "" || recipient.trim() === "") return;
-    if (!myPublicKey || !recipientPublicKey) return;
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
     // Never encrypt to a key the user hasn't accepted after a key change.
     if (!me || await isSendBlocked(me, recipient)) return;
 
+    const text = input;
+    const extras: SendExtras = { replyToId: replyTo?.id ?? null };
     try {
-      const enc = await encryptMessage(input, myPublicKey, recipientPublicKey);
-      wsRef.current.send(
-        JSON.stringify({
-          to: recipient,
-          content: enc.ciphertext,
-          encryptedKeyForSender: enc.encryptedKeyForSender,
-          encryptedKeyForRecipient: enc.encryptedKeyForRecipient,
-          replyToId: replyTo?.id ?? null,
-        }),
-      );
+      if (!(await sendV2(text, extras))) {
+        if (!myPublicKey || !recipientPublicKey) return;
+        sendLegacy(await encryptMessage(text, myPublicKey, recipientPublicKey), extras);
+      }
       setInput("");
       setReplyTo(null);
     } catch (err) {
-      console.error("Encryption failed", err);
+      console.error("Send failed", err);
     }
   }
 
@@ -488,34 +629,29 @@ function App() {
     if (!me || await isSendBlocked(me, recipient)) {
       throw new Error("Contact's security key changed — accept it before sending");
     }
-    if (!myPublicKey || !recipientPublicKey) {
+    if (!(signalRef.current && recipientIdentity) && !(myPublicKey && recipientPublicKey)) {
       throw new Error("Encryption keys not ready");
     }
     const { mediaId, mimeType, wireMimeType, key } = await uploadMedia(file, token);
-    const enc = await encryptMessage(
-      buildMediaEnvelope(key, mimeType),
-      myPublicKey,
-      recipientPublicKey,
-    );
-    if (wsRef.current?.readyState !== WebSocket.OPEN) throw new Error("Not connected");
-    wsRef.current.send(
-      JSON.stringify({
-        to: recipient,
-        content: enc.ciphertext,
-        encryptedKeyForSender: enc.encryptedKeyForSender,
-        encryptedKeyForRecipient: enc.encryptedKeyForRecipient,
-        mediaId,
-        mimeType: wireMimeType,
-        viewOnce,
-        replyToId: replyTo?.id ?? null,
-      }),
-    );
+    // The blob key + real type ride inside the message, so they get the same
+    // protection (v2: forward secrecy) as text.
+    const envelope = buildMediaEnvelope(key, mimeType);
+    const extras: SendExtras = { mediaId, mimeType: wireMimeType, viewOnce, replyToId: replyTo?.id ?? null };
+    if (!(await sendV2(envelope, extras))) {
+      if (!myPublicKey || !recipientPublicKey) throw new Error("Encryption keys not ready");
+      sendLegacy(await encryptMessage(envelope, myPublicKey, recipientPublicKey), extras);
+    }
     setReplyTo(null);
   }
 
   // After the recipient consumes a snap, flip its viewedAt locally so the
   // bubble switches to "Snap viewed" without waiting for a refetch.
   function markSnapViewed(key: string) {
+    const matches = (m: ChatMessage) => `${m.from}|${m.sentAt}|${m.mediaId ?? ""}` === key;
+    if (me && recipient) {
+      patchMessage(me, recipient, (m) => matches(m) && !m.viewedAt, { viewedAt: new Date().toISOString() })
+        .catch(console.error);
+    }
     setMessages((prev) => {
       const next = prev.map((m) =>
         `${m.from}|${m.sentAt}|${m.mediaId ?? ""}` === key
@@ -809,10 +945,12 @@ function App() {
           state: document.hidden ? "hidden" : "visible",
         }));
       }
+      // Going to the background is a good moment for the (at most daily) backup.
+      if (document.hidden && me) maybeAutoBackup(me, token);
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [token]);
+  }, [token, me]);
 
   // ── render ──────────────────────────────────────────────────────
 
@@ -998,6 +1136,24 @@ function App() {
           onEnableNotifications={handleEnableNotifications}
           onLogout={handleLogout}
           onUpdateProfile={handleUpdateProfile}
+        >
+          {me && (
+            <>
+              <BackupSettings me={me} token={token} onRestored={() => setHistoryVersion((v) => v + 1)} />
+              <DevicesSettings me={me} token={token} currentDeviceId={signalDeviceId} />
+            </>
+          )}
+        </SettingsView>
+      )}
+
+      {offerRestore && me && (
+        <RestoreBackupPrompt
+          me={me}
+          token={token}
+          onDone={(restored) => {
+            setOfferRestore(false);
+            if (restored > 0) setHistoryVersion((v) => v + 1);
+          }}
         />
       )}
 
@@ -1013,7 +1169,7 @@ function App() {
           onSend={send}
           onSendMedia={sendMedia}
           onMarkSnapViewed={markSnapViewed}
-          recipientPublicKeyReady={!!recipientPublicKey}
+          recipientPublicKeyReady={!!recipientPublicKey || (!!recipientIdentity && signalDeviceId !== null)}
           replyTo={replyTo}
           onStartReply={setReplyTo}
           onCancelReply={() => setReplyTo(null)}
