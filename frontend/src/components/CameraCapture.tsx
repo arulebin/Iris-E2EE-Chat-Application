@@ -1,5 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { VideoIcon, XIcon } from "./icons";
+import {
+  CaptureCancelled,
+  hasNativeCamera,
+  nativeRecordVideo,
+  nativeTakePhoto,
+} from "../lib/nativeCamera";
+
+// ImageCapture (Chrome/Android) isn't in TS's DOM lib yet — just what we use.
+type ImageCaptureLike = { takePhoto(): Promise<Blob> };
+type ImageCaptureCtor = new (track: MediaStreamTrack) => ImageCaptureLike;
+
+// Recording bitrate. Browsers default to ~2.5 Mbps, which smears 1080p motion.
+const VIDEO_BITS_PER_SECOND = 8_000_000;
 
 type Props = {
   onCapture: (file: File) => void;
@@ -22,16 +35,22 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
   const [recElapsed, setRecElapsed] = useState(0);
   const [facing, setFacing] = useState<"user" | "environment">("user");
   const [preview, setPreview] = useState<Preview>(null);
+  const native = hasNativeCamera();
 
   // (Re-)acquire stream when facing or mode changes. Audio only needed for video.
   useEffect(() => {
-    if (preview) return; // pause stream while user is reviewing the capture
+    if (preview || native) return; // paused while reviewing; native uses the system camera
     let cancelled = false;
     streamRef.current?.getTracks().forEach((t) => t.stop());
 
+    // Square "ideal" bounds let the browser pick the sensor's best mode in
+    // either orientation — a landscape 1920×1080 ask on a portrait phone often
+    // falls back to 720p. Photos want full resolution; video stays ≤1080p so
+    // the encoder keeps up.
+    const edge = mode === "photo" ? 4096 : 1920;
     navigator.mediaDevices
       .getUserMedia({
-        video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: { facingMode: facing, width: { ideal: edge }, height: { ideal: edge } },
         audio: mode === "video"
       })
       .then((stream) => {
@@ -58,7 +77,7 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
-  }, [facing, mode, preview]);
+  }, [facing, mode, preview, native]);
 
   // Tick the REC counter while a video is being captured.
   useEffect(() => {
@@ -74,13 +93,52 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
     return () => window.clearInterval(id);
   }, [recording]);
 
-  function takePhoto() {
+  function showPreview(file: File) {
+    setPreview({
+      url: URL.createObjectURL(file),
+      file,
+      isVideo: file.type.startsWith("video/"),
+    });
+  }
+
+  // Android app: the system camera owns capture; we just show the result.
+  async function captureNative(kind: Mode) {
+    setError(null);
+    try {
+      showPreview(kind === "photo" ? await nativeTakePhoto() : await nativeRecordVideo());
+    } catch (err) {
+      if (err instanceof CaptureCancelled) return;
+      setError(err instanceof Error ? err.message : "Camera unavailable");
+    }
+  }
+
+  // Prefer ImageCapture.takePhoto(): it triggers the camera's real still
+  // pipeline (full sensor resolution, focus + denoise) instead of copying one
+  // compressed preview frame, which is what made shots look blurry.
+  async function grabStill(video: HTMLVideoElement): Promise<CanvasImageSource> {
+    const track = streamRef.current?.getVideoTracks()[0];
+    const Ctor = (window as unknown as { ImageCapture?: ImageCaptureCtor }).ImageCapture;
+    if (track && Ctor) {
+      try {
+        return await createImageBitmap(await new Ctor(track).takePhoto());
+      } catch {
+        // Some devices/drivers reject takePhoto — fall back to the video frame.
+      }
+    }
+    return video;
+  }
+
+  async function takePhoto() {
     const video = videoRef.current;
     if (!video || !video.videoWidth || !video.videoHeight) return;
 
+    const source = await grabStill(video);
+    const width = source instanceof HTMLVideoElement ? source.videoWidth : (source as ImageBitmap).width;
+    const height = source instanceof HTMLVideoElement ? source.videoHeight : (source as ImageBitmap).height;
+
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
@@ -89,16 +147,16 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
       ctx.translate(canvas.width, 0);
       ctx.scale(-1, 1);
     }
-    ctx.drawImage(video, 0, 0);
+    ctx.drawImage(source, 0, 0, width, height);
+    if (source instanceof ImageBitmap) source.close();
 
     canvas.toBlob(
       (blob) => {
         if (!blob) return;
-        const file = new File([blob], `photo-${Date.now()}.jpg`, { type: "image/jpeg" });
-        setPreview({ url: URL.createObjectURL(blob), file, isVideo: false });
+        showPreview(new File([blob], `photo-${Date.now()}.jpg`, { type: "image/jpeg" }));
       },
       "image/jpeg",
-      0.9
+      0.92
     );
   }
 
@@ -117,9 +175,10 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
       "video/mp4",
     ];
     const mime = candidates.find((m) => MediaRecorder.isTypeSupported(m));
-    const recorder = mime
-      ? new MediaRecorder(stream, { mimeType: mime })
-      : new MediaRecorder(stream);
+    const recorder = new MediaRecorder(stream, {
+      ...(mime ? { mimeType: mime } : {}),
+      videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+    });
     recorderRef.current = recorder;
 
     recorder.ondataavailable = (e) => {
@@ -129,8 +188,7 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
       const type = recorder.mimeType || "video/webm";
       const blob = new Blob(chunksRef.current, { type });
       const ext = type.includes("mp4") ? "mp4" : "webm";
-      const file = new File([blob], `video-${Date.now()}.${ext}`, { type });
-      setPreview({ url: URL.createObjectURL(blob), file, isVideo: true });
+      showPreview(new File([blob], `video-${Date.now()}.${ext}`, { type }));
       setRecording(false);
     };
     recorder.start();
@@ -192,6 +250,41 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
             Send
           </button>
         </div>
+      </div>
+    );
+  }
+
+  // ─── Native capture screen (Android app) ────────────────────────
+  if (native) {
+    return (
+      <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center gap-4 px-8">
+        <button
+          onClick={onCancel}
+          className="absolute top-4 right-4 text-white/80 hover:text-white p-2 z-10"
+          aria-label="Close camera"
+        >
+          <XIcon className="w-7 h-7" />
+        </button>
+        {error && <p className="text-white/80 text-center mb-2">{error}</p>}
+        <button
+          onClick={() => captureNative("photo")}
+          className="w-full max-w-xs text-black text-base font-semibold px-7 py-3 rounded-full bg-white hover:bg-white/90 active:scale-95"
+        >
+          Take photo
+        </button>
+        <button
+          onClick={() => captureNative("video")}
+          className="w-full max-w-xs text-white text-base font-semibold px-7 py-3 rounded-full bg-white/15 hover:bg-white/25 active:scale-95 flex items-center justify-center gap-2"
+        >
+          <VideoIcon className="w-4 h-4" />
+          Record video
+        </button>
+        <button
+          onClick={onCancel}
+          className="text-white/80 hover:text-white text-sm font-semibold mt-2"
+        >
+          Cancel
+        </button>
       </div>
     );
   }

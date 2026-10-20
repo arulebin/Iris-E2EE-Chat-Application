@@ -25,7 +25,7 @@ public class SecurityConfig {
     @Value("${spring.h2.console.enabled:false}")
     private boolean h2ConsoleEnabled;
 
-    @Value("${cors.allowed-origins:http://localhost:5173,http://localhost:8080,https://iris-chat-web.vercel.app}")
+    @Value("${cors.allowed-origins:http://localhost:5173,http://localhost:8080,https://iris-chat-web.vercel.app,https://localhost}")
     private String[] allowedOrigins;
 
     public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
@@ -40,7 +40,8 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        // Defaults cover Vite dev (5173) and the Docker frontend port (8080).
+        // Defaults cover Vite dev (5173), the Docker frontend port (8080), and the
+        // Capacitor Android app, whose WebView origin is https://localhost.
         // Override via cors.allowed-origins property or CORS_ALLOWED_ORIGINS env var (comma-separated).
         config.setAllowedOrigins(List.of(allowedOrigins));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));

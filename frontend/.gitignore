@@ -23,3 +23,5 @@ dist-ssr
 *.sln
 *.sw?
 .claude/
+# Capacitor build env (holds your backend URL)
+.env.android
