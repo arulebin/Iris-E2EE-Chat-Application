@@ -1,0 +1,20 @@
+# Automatic HTTPS (Let's Encrypt) for the API + WebSocket endpoint.
+# IRIS_DOMAIN comes from .env — e.g. api.yourdomain.tech, or <ip-with-dashes>.sslip.io
+# until you have a domain. WebSocket upgrades are proxied automatically.
+{$IRIS_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	# Matches Spring's 50 MB media limit (+ multipart overhead).
+	request_body {
+		max_size 52MB
+	}
+
+	reverse_proxy backend:8080
+}

@@ -1,0 +1,76 @@
+# Production stack for a single small VM (tuned for Oracle's 1 GB E2.1.Micro).
+# Caddy terminates TLS and proxies everything (REST + WebSocket) to the backend;
+# the frontend is hosted separately (Vercel / the Android app).
+#
+#   cd ~/iris && docker compose -f docker-compose.prod.yml up -d
+#
+# The backend runs the prebuilt jar (./app.jar) on the stock JRE image, so the
+# VM never has to run a Maven build. Deploy a new version with deploy/deploy.sh.
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      IRIS_DOMAIN: ${IRIS_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - backend
+    mem_limit: 64m
+
+  backend:
+    image: eclipse-temurin:25-jre
+    restart: unless-stopped
+    working_dir: /app
+    command: ["java", "-jar", "/app/app.jar"]
+    env_file: .env
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/iris
+      SPRING_DATASOURCE_USERNAME: iris
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATASOURCE_HIKARI_MAXIMUM_POOL_SIZE: "5"
+      MEDIA_STORAGE_DIR: /app/data/media
+      # Small heap + serial GC: the whole VM has under 1 GB of RAM.
+      JAVA_TOOL_OPTIONS: >-
+        -Xms128m -Xmx320m -XX:MaxMetaspaceSize=160m -Xss512k
+        -XX:+UseSerialGC -XX:TieredStopAtLevel=1
+    volumes:
+      - ./app.jar:/app/app.jar:ro
+      - iris-data:/app/data
+      - ./secrets:/app/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 560m
+    # no host port: only Caddy reaches it
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: iris
+      POSTGRES_USER: iris
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command: >-
+      postgres -c shared_buffers=48MB -c effective_cache_size=192MB
+      -c work_mem=2MB -c maintenance_work_mem=32MB -c max_connections=20
+    volumes:
+      - iris-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iris -d iris"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 192m
+
+volumes:
+  caddy-data:
+  caddy-config:
+  iris-data:
+  iris-pgdata:

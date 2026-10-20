@@ -175,8 +175,12 @@ java -jar target/backend-0.0.1-SNAPSHOT.jar
 *Note: Make sure your server's firewall (e.g., `ufw`) allows traffic on port 8080 (or whatever port you proxy through Nginx).*
 
 ## 🔒 Security Model
-Iris employs End-to-End Encryption where messages are encrypted using an ephemeral AES key. That AES key is then dual-encrypted using the sender's and recipient's RSA public keys. 
-When logging in from a new device, a Key Encryption Key (KEK) is derived from your password to decrypt your centrally-backed-up private key securely.
+- **Messages** use the Signal Protocol (X3DH + Double Ratchet) with per-device sessions, so they have forward secrecy. The server only stores short-lived per-device envelopes, deleted once delivered. Contacts who haven't upgraded yet fall back to hybrid AES-GCM + RSA-OAEP.
+- **Photos, videos and snaps** are encrypted in the browser with a per-file AES-GCM key that travels inside the encrypted message. The server only stores ciphertext.
+- **Keys:** your password goes through PBKDF2 and then HKDF, giving two separate secrets. One is the login credential; the other unwraps your identity key and never leaves the device. Private keys are stored as non-extractable WebCrypto keys.
+- **Safety numbers:** each contact's key is pinned on first use, compared via QR code, and if it changes later, sending is blocked until you accept the new key.
+- **History backup** is encrypted with a recovery key that only you hold.
+- **Android app:** FLAG_SECURE (blocks screenshots and recording), and push notifications that never include sender names or content.
 
 ---
 *Created as an exploratory self-hosted learning project.*
@@ -184,3 +188,7 @@ When logging in from a new device, a Key Encryption Key (KEK) is derived from yo
 ## Android push notifications
 
 See [docs/android-push.md](docs/android-push.md) for Firebase Cloud Messaging setup.
+
+## 📜 License
+Iris is free software, licensed under the [GNU General Public License v3.0](LICENSE) (GPL-3.0-only).
+It uses [`@privacyresearch/libsignal-protocol-typescript`](https://github.com/privacyresearch/libsignal-protocol-typescript), which is also GPL-3.0.

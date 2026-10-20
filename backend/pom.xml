@@ -15,7 +15,10 @@
 	<description/>
 	<url/>
 	<licenses>
-		<license/>
+		<license>
+			<name>GPL-3.0-only</name>
+			<url>https://www.gnu.org/licenses/gpl-3.0.txt</url>
+		</license>
 	</licenses>
 	<developers>
 		<developer/>
