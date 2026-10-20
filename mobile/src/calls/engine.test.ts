@@ -273,6 +273,30 @@ describe('push-announced incoming (app was killed)', () => {
   })
 })
 
+describe('push without caller identity (privacy-preserving payload)', () => {
+  it('rings with an unknown caller, then learns it from the offer and answers', async () => {
+    engine.announceIncoming({ callId: 'in-1', mode: 'audio' })
+    expect(state()).toMatchObject({ kind: 'incoming', from: '', offer: null })
+    await engine.accept()
+    transport.deliver(offerFrom('bob', 'in-1', 'audio'))
+    await flush()
+    await flush()
+    expect(state()).toMatchObject({ kind: 'active', peer: 'bob' })
+    expect(transport.ofType('call-answer')[0]).toMatchObject({ to: 'bob', callId: 'in-1' })
+  })
+
+  it('declining before the offer arrives declines as soon as the offer names the caller', async () => {
+    engine.announceIncoming({ callId: 'in-1', mode: 'video' })
+    engine.reject()
+    expect(state().kind).toBe('idle')
+    expect(transport.sent).toHaveLength(0)
+    transport.deliver(offerFrom('bob', 'in-1'))
+    await flush()
+    expect(transport.ofType('call-end')[0]).toMatchObject({ to: 'bob', callId: 'in-1', reason: 'declined' })
+    expect(state().kind).toBe('idle') // never rings
+  })
+})
+
 describe('in-call controls', () => {
   it('mute toggles the track and tells the peer', async () => {
     await dialAndConnect()

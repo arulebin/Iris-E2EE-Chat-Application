@@ -75,6 +75,8 @@ export class CallEngine {
   private outbox: CallSignal[] = []
   private pendingAccept: { callId: string; withVideo: boolean } | null = null
   private accepting: string | null = null
+  /** Calls declined before their offer (and so the caller's name) reached us - answered with a decline when it does. */
+  private declinedEarly = new Set<string>()
 
   private ringTimer: Timer | null = null
   private graceTimer: Timer | null = null
@@ -364,11 +366,12 @@ export class CallEngine {
    * A push told us a call is ringing before the socket delivered the offer.
    * Shows the incoming UI right away; the offer fills in when the server replays it.
    */
-  announceIncoming(info: { from: string; callId: string; mode: CallMode }) {
+  announceIncoming(info: { from?: string; callId: string; mode: CallMode }) {
     const cur = this.state
     if (cur.kind !== 'idle') return // already in (or ringing for) a call; the real offer path handles busy
-    this.meta = { peer: info.from, direction: 'incoming', mode: info.mode, connectedAt: null }
-    this.set({ state: { kind: 'incoming', from: info.from, offer: null, mode: info.mode, callId: info.callId }, summary: null })
+    const from = info.from ?? ''
+    this.meta = { peer: from, direction: 'incoming', mode: info.mode, connectedAt: null }
+    this.set({ state: { kind: 'incoming', from, offer: null, mode: info.mode, callId: info.callId }, summary: null })
     this.startIncomingRing(info.callId)
   }
 
@@ -428,7 +431,13 @@ export class CallEngine {
   reject() {
     const s = this.state
     if (s.kind !== 'incoming') return
-    this.send({ type: 'call-end', to: s.from, callId: s.callId, reason: 'declined' })
+    if (s.from) {
+      this.send({ type: 'call-end', to: s.from, callId: s.callId, reason: 'declined' })
+    } else {
+      // Announced by a push that carries no caller: we can only tell the relay once the offer names them.
+      if (this.declinedEarly.size > 20) this.declinedEarly.clear()
+      this.declinedEarly.add(s.callId)
+    }
     this.finish(null, 'declined')
   }
 
@@ -592,11 +601,16 @@ export class CallEngine {
     const from = sig.from!
     const mode = sig.mode ?? 'video'
 
-    if (cur.kind === 'incoming' && cur.from === from && cur.offer === null) {
+    if (sig.callId && this.declinedEarly.delete(sig.callId)) {
+      this.send({ type: 'call-end', to: from, callId: sig.callId, reason: 'declined' })
+      return
+    }
+
+    if (cur.kind === 'incoming' && cur.offer === null && (cur.callId === sig.callId || cur.from === from || cur.from === '')) {
       // The held offer for a call we already announced (push) — fill it in.
       const callId = sig.callId ?? cur.callId
       this.set({ state: { kind: 'incoming', from, offer: sig.payload, mode, callId } })
-      if (this.meta) this.meta.mode = mode
+      if (this.meta) { this.meta.mode = mode; this.meta.peer = from }
       const pa = this.pendingAccept
       this.pendingAccept = null
       this.accepting = null

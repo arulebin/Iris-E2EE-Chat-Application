@@ -43,7 +43,9 @@
           }
         }
       ],
-      "react-native-quick-crypto"
+      "react-native-quick-crypto",
+      "@config-plugins/react-native-webrtc",
+      "./modules/iris-calls/plugin"
     ],
     "experiments": {
       "typedRoutes": true
