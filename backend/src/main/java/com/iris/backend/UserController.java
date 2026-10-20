@@ -22,10 +22,13 @@ public class UserController {
     
     private final UserRepository userRepository;
     private final FriendRequestRepository friendRepository;
+    private final ChatWebSocketHandler chatHandler;
 
-    public UserController(UserRepository userRepository, FriendRequestRepository friendRepository) {
+    public UserController(UserRepository userRepository, FriendRequestRepository friendRepository,
+                          ChatWebSocketHandler chatHandler) {
         this.userRepository = userRepository;
         this.friendRepository = friendRepository;
+        this.chatHandler = chatHandler;
     }
 
     @GetMapping("/users")
@@ -83,6 +86,11 @@ public class UserController {
         if (request.preferredName() != null) user.setPreferredName(request.preferredName());
         if (request.avatarUrl() != null) user.setAvatarUrl(request.avatarUrl());
         userRepository.save(user);
+        // Friends' open clients refresh their contact list (name/avatar) live.
+        String me = user.getUsername();
+        for (FriendRequest fr : friendRepository.findAcceptedByUser(me)) {
+            chatHandler.notifyUser(fr.getFromUser().equals(me) ? fr.getToUser() : fr.getFromUser(), "friends-changed");
+        }
         return UserProfileDto.from(user);
     }
 }
