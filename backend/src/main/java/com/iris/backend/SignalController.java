@@ -21,18 +21,16 @@ public class SignalController {
     private final SignalKeyService keys;
     private final UserRepository userRepository;
     private final FriendRequestRepository friendRequestRepository;
-    private final ChatWebSocketHandler chatHandler;
-    private final SessionService sessionService;
+    private final DeviceCleanupService cleanup;
     private final GroupService groups;
 
     public SignalController(SignalKeyService keys, UserRepository userRepository,
-                            FriendRequestRepository friendRequestRepository, ChatWebSocketHandler chatHandler,
-                            SessionService sessionService, GroupService groups) {
+                            FriendRequestRepository friendRequestRepository, DeviceCleanupService cleanup,
+                            GroupService groups) {
         this.keys = keys;
         this.userRepository = userRepository;
         this.friendRequestRepository = friendRequestRepository;
-        this.chatHandler = chatHandler;
-        this.sessionService = sessionService;
+        this.cleanup = cleanup;
         this.groups = groups;
     }
 
@@ -84,6 +82,9 @@ public class SignalController {
     @PostMapping("/devices")
     public ResponseEntity<Object> registerDevice(@RequestBody SignalKeyService.DeviceRegistration req, Authentication auth) {
         try {
+            // Same phone, reinstalled: its previous registrations are dead — retire them first (this also
+            // frees their slots under the device limit).
+            cleanup.retireSameInstall(auth.getName(), SignalKeyService.validInstallKey(req.installKey()));
             return ResponseEntity.ok(Map.of("deviceId", keys.registerDevice(auth.getName(), req)));
         } catch (IllegalStateException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
@@ -109,12 +110,26 @@ public class SignalController {
 
     @DeleteMapping("/devices/{deviceId}")
     public ResponseEntity<Void> removeDevice(@PathVariable int deviceId, Authentication auth) {
-        if (!keys.removeDevice(auth.getName(), deviceId)) return ResponseEntity.notFound().build();
-        chatHandler.revokeDevice(auth.getName(), deviceId);
-        // Its refresh tokens die with it: the removed device is logged out once its
-        // current access token (≤ 1 h) expires.
-        sessionService.revokeDevice(auth.getName(), deviceId);
+        if (!cleanup.retire(auth.getName(), deviceId)) return ResponseEntity.notFound().build();
         return ResponseEntity.noContent().build();
+    }
+
+    public record InstallKeyClaim(String installKey) { }
+
+    /**
+     * An already-registered app device reports its install key (app builds from before the key existed
+     * registered without one). Stores it and retires this phone's other, dead installs. Idempotent.
+     */
+    @PostMapping("/devices/{deviceId}/install-key")
+    public ResponseEntity<Object> claimInstallKey(@PathVariable int deviceId, @RequestBody InstallKeyClaim req, Authentication auth) {
+        if (req == null || req.installKey() == null) return ResponseEntity.badRequest().body(Map.of("error", "installKey is required"));
+        try {
+            List<Integer> removed = cleanup.claim(auth.getName(), deviceId, req.installKey());
+            if (removed == null) return ResponseEntity.notFound().build();
+            return ResponseEntity.ok(Map.of("removed", removed));
+        } catch (IllegalArgumentException e) {
+            return bad(e);
+        }
     }
 
     public record PreKeyUpload(List<SignalKeyService.PreKeyDto> preKeys) { }

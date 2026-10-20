@@ -18,10 +18,12 @@ public class EnvelopeController {
 
     private final EnvelopeService envelopes;
     private final DeviceRepository devices;
+    private final SignalKeyService keys;
 
-    public EnvelopeController(EnvelopeService envelopes, DeviceRepository devices) {
+    public EnvelopeController(EnvelopeService envelopes, DeviceRepository devices, SignalKeyService keys) {
         this.envelopes = envelopes;
         this.devices = devices;
+        this.keys = keys;
     }
 
     /** Same JSON as the socket's `envelope` frame; `body` is null in the metadata-only lookup. */
@@ -35,7 +37,10 @@ public class EnvelopeController {
     public record AckRequest(Integer device, List<Long> ids) { }
 
     private boolean ownDevice(Authentication auth, Integer device) {
-        return device != null && devices.existsByUsernameAndDeviceId(auth.getName(), device);
+        if (device == null || !devices.existsByUsernameAndDeviceId(auth.getName(), device)) return false;
+        // A device woken only by pushes never opens a socket: this is its sign of life.
+        keys.touchThrottled(auth.getName(), device);
+        return true;
     }
 
     /** Everything still queued for this device, oldest first (what `sync` would deliver). */

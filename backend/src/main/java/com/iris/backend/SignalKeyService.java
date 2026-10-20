@@ -4,10 +4,13 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Key directory for the Signal protocol: account identity keys, per-device
@@ -25,6 +28,8 @@ public class SignalKeyService {
     static final int MAX_PREKEYS_PER_DEVICE = 200;
     static final int MAX_DEVICES_PER_USER = 10;
     static final int MAX_LABEL = 64;
+    /** last_seen is written at most this often per device from the frequent paths (pings, REST, refresh). */
+    static final Duration TOUCH_INTERVAL = Duration.ofMinutes(10);
 
     private final UserRepository userRepository;
     private final DeviceRepository deviceRepository;
@@ -42,7 +47,9 @@ public class SignalKeyService {
     public record PreKeyDto(int keyId, String publicKey) { }
     public record SignedPreKeyDto(int keyId, String publicKey, String signature) { }
     public record IdentityPublish(String identityKey, String encryptedIdentityKey, String identityKeySalt, String crossSignature) { }
-    public record DeviceRegistration(int registrationId, String label, SignedPreKeyDto signedPreKey, List<PreKeyDto> preKeys) { }
+    /** `installKey` is optional (see {@link Device#getInstallKey()}); web clients and older apps omit it. */
+    public record DeviceRegistration(int registrationId, String label, SignedPreKeyDto signedPreKey, List<PreKeyDto> preKeys,
+                                     String installKey) { }
     public record DeviceInfo(int deviceId, int registrationId, String label, Instant createdAt, Instant lastSeen) { }
     public record Bundle(int deviceId, int registrationId, String identityKey, SignedPreKeyDto signedPreKey, PreKeyDto preKey) { }
 
@@ -65,6 +72,13 @@ public class SignalKeyService {
         if (spk == null) throw new IllegalArgumentException("signedPreKey is required");
         requireBytes(spk.publicKey(), CURVE_PUBLIC_KEY_BYTES, "signedPreKey.publicKey");
         requireBytes(spk.signature(), SIGNATURE_BYTES, "signedPreKey.signature");
+    }
+
+    /** null (absent) or 64 lowercase hex chars (an HMAC-SHA256). */
+    static String validInstallKey(String installKey) {
+        if (installKey == null) return null;
+        if (!installKey.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("installKey must be 64 hex characters");
+        return installKey;
     }
 
     static void validatePreKeys(List<PreKeyDto> preKeys) {
@@ -99,6 +113,7 @@ public class SignalKeyService {
         if (user.getIdentityKey() == null) throw new IllegalStateException("publish an identity key first");
         validateSignedPreKey(req.signedPreKey());
         validatePreKeys(req.preKeys());
+        String installKey = validInstallKey(req.installKey());
         if (deviceRepository.findByUsernameOrderByDeviceIdAsc(username).size() >= MAX_DEVICES_PER_USER) {
             throw new IllegalArgumentException("device limit reached — remove an old device first");
         }
@@ -106,8 +121,10 @@ public class SignalKeyService {
         userRepository.save(user);
 
         String label = req.label() == null ? null : req.label().substring(0, Math.min(req.label().length(), MAX_LABEL));
-        deviceRepository.save(new Device(username, deviceId, req.registrationId(),
-            req.signedPreKey().keyId(), req.signedPreKey().publicKey(), req.signedPreKey().signature(), label));
+        Device device = new Device(username, deviceId, req.registrationId(),
+            req.signedPreKey().keyId(), req.signedPreKey().publicKey(), req.signedPreKey().signature(), label);
+        device.setInstallKey(installKey);
+        deviceRepository.save(device);
         storePreKeys(username, deviceId, req.preKeys());
         return deviceId;
     }
@@ -137,8 +154,32 @@ public class SignalKeyService {
         return true;
     }
 
+    private final Map<String, Instant> lastTouch = new ConcurrentHashMap<>();
+
     public void touch(String username, int deviceId) {
-        deviceRepository.touch(username, deviceId, Instant.now());
+        Instant now = Instant.now();
+        lastTouch.put(username + "#" + deviceId, now);
+        deviceRepository.touch(username, deviceId, now);
+    }
+
+    /**
+     * Activity seen from this device (socket heartbeat, REST envelope fetch from a push, token refresh...):
+     * update last_seen, but write at most once per {@link #TOUCH_INTERVAL} per device. Keeps a device that
+     * only ever wakes up through pushes, or holds one socket open for weeks, from looking inactive.
+     * Matches on username too, so a caller can only ever touch its own devices.
+     */
+    public void touchThrottled(String username, Integer deviceId) {
+        if (username == null || deviceId == null) return;
+        Instant now = Instant.now();
+        String k = username + "#" + deviceId;
+        Instant prev = lastTouch.get(k);
+        if (prev != null && Duration.between(prev, now).compareTo(TOUCH_INTERVAL) < 0) return;
+        lastTouch.put(k, now);
+        deviceRepository.touch(username, deviceId, now);
+    }
+
+    void forgetTouch(String username, int deviceId) {
+        lastTouch.remove(username + "#" + deviceId);
     }
 
     // ── prekeys ───────────────────────────────────────────────────────

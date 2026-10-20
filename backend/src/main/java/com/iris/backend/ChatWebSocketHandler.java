@@ -126,6 +126,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         // Heartbeats are a fixed frame, matched exactly so they skip JSON parsing.
         if (PING_FRAME.equals(payload)) {
             session.getAttributes().put(LAST_PING, System.currentTimeMillis());
+            // A socket can stay open for weeks: keep its device's last_seen current (throttled).
+            signalKeys.touchThrottled((String) session.getAttributes().get("username"), deviceIdOf(session));
             send(session, "{\"type\":\"pong\"}");
             return;
         }

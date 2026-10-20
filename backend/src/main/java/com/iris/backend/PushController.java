@@ -48,6 +48,7 @@ public class PushController {
         Integer deviceId = req.deviceId();
         row.setDeviceId(deviceId != null && devices.existsByUsernameAndDeviceId(username, deviceId) ? deviceId : null);
         fcmTokens.save(row);
+        if (row.getDeviceId() != null) devices.touch(username, row.getDeviceId(), java.time.Instant.now());
         return ResponseEntity.ok().build();
     }
 

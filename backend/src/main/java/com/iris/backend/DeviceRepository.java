@@ -18,6 +18,9 @@ public interface DeviceRepository extends JpaRepository<Device, Long> {
 
     boolean existsByUsernameAndDeviceId(String username, int deviceId);
 
+    /** Devices not seen since {@code cutoff}: candidates for the inactivity prune. */
+    List<Device> findByLastSeenBefore(Instant cutoff);
+
     @Transactional
     @Modifying
     @Query("UPDATE Device d SET d.lastSeen = :now WHERE d.username = :username AND d.deviceId = :deviceId")

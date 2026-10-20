@@ -41,6 +41,16 @@ public class Device {
     @Column(length = 64)
     private String label;
 
+    /**
+     * Install-stable, per-account device key sent by the mobile app: hex HMAC-SHA256(key = username,
+     * message = Android's ANDROID_ID). ANDROID_ID survives an uninstall + reinstall of the same signed app,
+     * so a re-registration from the same phone carries the same key and replaces its dead predecessor.
+     * Keyed by the username, so the server can't link one phone across accounts. NULL for web devices and
+     * for app builds that predate the field.
+     */
+    @Column(length = 64)
+    private String installKey;
+
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
@@ -68,6 +78,8 @@ public class Device {
     public String getSignedPreKey() { return signedPreKey; }
     public String getSignedPreKeySignature() { return signedPreKeySignature; }
     public String getLabel() { return label; }
+    public String getInstallKey() { return installKey; }
+    public void setInstallKey(String installKey) { this.installKey = installKey; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getLastSeen() { return lastSeen; }
     public void setLastSeen(Instant lastSeen) { this.lastSeen = lastSeen; }

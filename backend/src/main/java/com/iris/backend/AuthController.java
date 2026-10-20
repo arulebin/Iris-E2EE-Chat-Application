@@ -11,11 +11,14 @@ public class AuthController {
     private final UserService userService;
     private final SessionService sessionService;
     private final JwtService jwtService;
+    private final SignalKeyService signalKeys;
 
-    public AuthController(UserService userService, SessionService sessionService, JwtService jwtService) {
+    public AuthController(UserService userService, SessionService sessionService, JwtService jwtService,
+                          SignalKeyService signalKeys) {
         this.userService = userService;
         this.sessionService = sessionService;
         this.jwtService = jwtService;
+        this.signalKeys = signalKeys;
     }
 
     @PostMapping("/signup")
@@ -48,6 +51,8 @@ public class AuthController {
     public ResponseEntity<?> refresh(@RequestBody RefreshRequest req) {
         try {
             SessionService.Rotated r = sessionService.rotate(req.refreshToken(), req.deviceId());
+            // Hourly sign of life from the device, even if it never opens a socket (throttled; own account only).
+            signalKeys.touchThrottled(r.username(), req.deviceId());
             return ResponseEntity.ok(new LoginResponse(jwtService.generateToken(r.username()), r.refreshToken()));
         } catch (SessionService.RefreshRaceException e) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
