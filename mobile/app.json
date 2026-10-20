@@ -108,7 +108,9 @@
           ],
           "isAccessMediaLocationEnabled": false
         }
-      ]
+      ],
+      "@config-plugins/react-native-webrtc",
+      "./modules/iris-calls/plugin"
     ],
     "experiments": {
       "typedRoutes": true

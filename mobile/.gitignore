@@ -43,3 +43,5 @@ gradle-build.log
 
 # public code-signing certificate (embedded in the app); private keys stay ignored
 !certs/certificate.pem
+# Native module build output (gradle)
+modules/*/android/build/
