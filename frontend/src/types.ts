@@ -43,8 +43,10 @@ export type ChatMessage = {
 
 export type CallMode = 'audio' | 'video';
 
+// callId ties every signal to one call, so stray or stale signals (another caller
+// giving up, a previous call's late call-end) can't touch the current one.
 export type CallState =
   | { kind: 'idle' }
-  | { kind: 'outgoing'; to: string; mode: CallMode }
-  | { kind: 'incoming'; from: string; offer: RTCSessionDescriptionInit; mode: CallMode }
-  | { kind: 'active'; peer: string; mode: CallMode };
+  | { kind: 'outgoing'; to: string; mode: CallMode; callId: string }
+  | { kind: 'incoming'; from: string; offer: RTCSessionDescriptionInit; mode: CallMode; callId: string }
+  | { kind: 'active'; peer: string; mode: CallMode; callId: string; role: 'caller' | 'callee'; startedAt: number };
