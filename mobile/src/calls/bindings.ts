@@ -116,7 +116,8 @@ export function startNativeBindings(engine: CallEngine, o: BindingOptions): () =
   offs.push(engine.subscribe(() => apply(engine.getSnapshot())))
 
   // ── native -> JS ─────────────────────────────────────────────
-  if (IrisCalls) {
+  const native = IrisCalls
+  if (native) {
     const onAction = (a: NativeCallAction) => {
       log('[call] native action', a.action, a.callId)
       const s = engine.getSnapshot().state
@@ -137,7 +138,7 @@ export function startNativeBindings(engine: CallEngine, o: BindingOptions): () =
           if (!known || !a.callId || known.callId === a.callId) {
             engine.reject()
             // Declined from the notification of a dead app: go back to wherever the user was.
-            if (AppState.currentState === 'active') IrisCalls.moveTaskToBack()
+            if (AppState.currentState === 'active') native.moveTaskToBack()
           }
           break
         case 'hangup':
@@ -145,19 +146,19 @@ export function startNativeBindings(engine: CallEngine, o: BindingOptions): () =
           break
       }
     }
-    const sub1 = IrisCalls.addListener('onCallAction', onAction)
-    const sub2 = IrisCalls.addListener('onPipChange', ({ active }) => {
+    const sub1 = native.addListener('onCallAction', onAction)
+    const sub2 = native.addListener('onPipChange', ({ active }) => {
       // PiP shows the call chrome-less: the overlay reads this to hide controls.
       pipListeners.forEach((l) => l(active))
     })
-    const sub3 = IrisCalls.addListener('onAudioDevices', (st) => {
+    const sub3 = native.addListener('onAudioDevices', (st) => {
       audio = st
-      if (prev) IrisCalls.setProximity(proximityWanted(prev))
+      if (prev) native.setProximity(proximityWanted(prev))
     })
     offs.push(() => { sub1.remove(); sub2.remove(); sub3.remove() })
     // Anything that happened before React mounted (Answer tapped on a dead app).
-    for (const a of IrisCalls.attach()) onAction(a)
-    offs.push(() => IrisCalls.detach())
+    for (const a of native.attach()) onAction(a)
+    offs.push(() => native.detach())
   }
 
   // ── network changes -> ICE restart ───────────────────────────

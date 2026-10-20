@@ -108,6 +108,9 @@ export class CallEngine {
 
   private get state(): CallState { return this.snap.state }
 
+  /** Re-read after an await: TS would otherwise keep a narrowing from before it. */
+  private readState(): CallState { return this.snap.state }
+
   attachTransport(t: CallSignalingTransport | null) {
     for (const off of this.transportOff) off()
     this.transportOff = []
@@ -343,7 +346,7 @@ export class CallEngine {
     this.set({ state: { kind: 'outgoing', to: peer, mode, callId }, summary: null, speakerOn: mode === 'video' })
 
     const stream = await this.getMedia(mode)
-    const still = this.state
+    const still = this.readState()
     if (!stream || still.kind !== 'outgoing' || still.callId !== callId) {
       stream?.getTracks().forEach((t) => t.stop())
       if (!stream && still.kind === 'outgoing' && still.callId === callId) this.finish(endNotice('permission', peer, 'outgoing'), 'permission')
@@ -353,7 +356,7 @@ export class CallEngine {
     this.publishLocal()
 
     const pc = await this.newPeer()
-    const now = this.state
+    const now = this.readState()
     if (now.kind !== 'outgoing' || now.callId !== callId) { pc.close(); this.pc = null; return } // hung up while fetching TURN
     stream.getTracks().forEach((t) => pc.addTrack(t, stream))
     const offer = await pc.createOffer()
@@ -400,7 +403,7 @@ export class CallEngine {
     const offer = s.offer
     const sendVideo = s.mode === 'video' && withVideo
     const stream = await this.getMedia(sendVideo ? 'video' : 'audio')
-    const still = this.state
+    const still = this.readState()
     if (still.kind !== 'incoming' || still.callId !== s.callId) {
       stream?.getTracks().forEach((t) => t.stop()) // caller gave up during the permission prompt
       return
@@ -415,7 +418,7 @@ export class CallEngine {
     this.publishLocal()
 
     const pc = await this.newPeer()
-    const now = this.state
+    const now = this.readState()
     if (now.kind !== 'incoming' || now.callId !== s.callId) { pc.close(); this.pc = null; return } // canceled meanwhile
     stream.getTracks().forEach((t) => pc.addTrack(t, stream))
     await pc.setRemoteDescription(offer)

@@ -48,10 +48,11 @@ const video = (facing: Facing) => ({
 export function createRnWebrtcDriver(o: RtcDriverOptions): RtcDriver {
   return {
     async getUserMedia(opts) {
-      const stream = await mediaDevices.getUserMedia({
+      const constraints = {
         audio: opts.audio ? AUDIO : false,
         video: opts.video ? video(opts.video.facing) : false,
-      })
+      } as Parameters<typeof mediaDevices.getUserMedia>[0]
+      const stream = await mediaDevices.getUserMedia(constraints)
       return stream as unknown as StreamLike
     },
 
