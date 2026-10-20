@@ -26,7 +26,11 @@ const IV_BYTES = 12
 const FLAG_GZIP = 1
 const HKDF_INFO = new TextEncoder().encode('iris-backup-v1')
 const KEY_BYTES = 32
-const AUTO_BACKUP_MS = 24 * 3600_000
+const DAY_MS = 24 * 3600_000
+
+/** How often this device refreshes the backup on its own. 'manual' = only when the user taps "Back up now". */
+export type BackupFrequency = 'daily' | 'weekly' | 'manual'
+export const BACKUP_INTERVAL_MS: Record<BackupFrequency, number> = { daily: DAY_MS, weekly: 7 * DAY_MS, manual: Infinity }
 
 // Crockford base32: no I/L/O/U, so it's hard to misread when typed back in.
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
@@ -34,6 +38,8 @@ const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 const localKeyFor = (me: string) => `iris-backup-key:${me}`
 const lastBackupFor = (me: string) => `iris-backup-last:${me}`
 const dismissedFor = (me: string) => `iris-backup-restore-dismissed:${me}`
+const frequencyFor = (me: string) => `iris-backup-frequency:${me}`
+const lastSizeFor = (me: string) => `iris-backup-size:${me}`
 
 // ── recovery key encoding ───────────────────────────────────────────
 
@@ -176,6 +182,26 @@ export async function lastBackupAt(me: string): Promise<number | null> {
   return (await getPlatform().kv.get<number>(lastBackupFor(me))) ?? null
 }
 
+/** Size in bytes of the last backup this device uploaded (null before the first one). */
+export async function lastBackupSize(me: string): Promise<number | null> {
+  return (await getPlatform().kv.get<number>(lastSizeFor(me))) ?? null
+}
+
+export async function getBackupFrequency(me: string): Promise<BackupFrequency> {
+  const v = await getPlatform().kv.get<string>(frequencyFor(me))
+  return v === 'weekly' || v === 'manual' ? v : 'daily'
+}
+
+export async function setBackupFrequency(me: string, frequency: BackupFrequency): Promise<void> {
+  await getPlatform().kv.set(frequencyFor(me), frequency)
+}
+
+/** Whether an automatic backup is due now (pure; exported for tests). */
+export function isBackupDue(last: number | null, frequency: BackupFrequency, now = Date.now()): boolean {
+  if (frequency === 'manual') return false
+  return !last || now - last >= BACKUP_INTERVAL_MS[frequency]
+}
+
 /**
  * Turn backups on: create a fresh recovery key, keep a non-extractable handle,
  * and upload the first backup. Returns the key for the user to write down —
@@ -210,26 +236,37 @@ export async function backupNow(me: string, token: string, opts: { replace?: boo
   if (res.status === 413) throw new Error('Your message history is too large to back up (25 MB limit)')
   if (!res.ok) throw new Error(`Backup upload failed: ${res.status}`)
   await kv.set(lastBackupFor(me), Date.now())
+  await kv.set(lastSizeFor(me), blob.length)
 }
+
+export type RestorePhase = 'download' | 'decrypt' | 'merge'
 
 /**
  * Restore from the server backup with a recovery key. Messages are merged into
- * local history (nothing local is lost). On success the key is remembered so
- * this device keeps the backup up to date. Returns the number of messages restored.
+ * local history: nothing local is lost, a message already here keeps its local
+ * copy, and messages arriving during the restore are untouched (see importAll).
+ * Only message history is restored — never Signal sessions or keys, which are per
+ * device. On success the key is remembered so this device keeps the backup up to
+ * date. Returns the number of messages that were new on this device.
  */
-export async function restoreBackup(me: string, token: string, recoveryKey: string): Promise<number> {
+export async function restoreBackup(me: string, token: string, recoveryKey: string,
+                                    opts: { onPhase?: (phase: RestorePhase) => void } = {}): Promise<number> {
   const { apiFetch, apiBase, kv, masterKeys } = getPlatform()
   const base = await importRecoveryKey(parseRecoveryKey(recoveryKey))
+  opts.onPhase?.('download')
   const res = await apiFetch(`${apiBase}/api/backup`, { headers: { Authorization: `Bearer ${token}` } })
   if (res.status === 404) throw new Error('There is no backup for this account')
   if (!res.ok) throw new Error(`Backup download failed: ${res.status}`)
+  const blob = new Uint8Array(await res.arrayBuffer())
+  opts.onPhase?.('decrypt')
   let payload: BackupPayload
   try {
-    payload = await openBackup(base, me, new Uint8Array(await res.arrayBuffer()))
+    payload = await openBackup(base, me, blob)
   } catch (err) {
     if (err instanceof Error && err.name === 'OperationError') throw new Error("That recovery key doesn't open this backup", { cause: err })
     throw err
   }
+  opts.onPhase?.('merge')
   const count = await importAll(me, payload.conversations)
   await masterKeys.save(kv, localKeyFor(me), base)
   await kv.set(dismissedFor(me), true)
@@ -242,15 +279,34 @@ export async function disableBackup(me: string, token: string): Promise<void> {
   if (!res.ok && res.status !== 404) throw new Error(`Couldn't delete the backup: ${res.status}`)
   await kv.delete(localKeyFor(me))
   await kv.delete(lastBackupFor(me))
+  await kv.delete(lastSizeFor(me))
 }
 
-/** Back up in the background at most once a day; failures are only logged. */
-export async function maybeAutoBackup(me: string, token: string): Promise<void> {
-  if (!(await isBackupEnabled(me))) return
-  const last = await lastBackupAt(me)
-  if (last && Date.now() - last < AUTO_BACKUP_MS) return
-  await backupNow(me, token).catch(err => console.warn('Automatic backup failed', err))
+/**
+ * Back up in the background when due under this device's frequency (daily unless changed). Single-flight
+ * per account, so app start, foreground and background can all ask. Failures are only logged; returns
+ * whether a backup was uploaded.
+ */
+export function maybeAutoBackup(me: string, token: string): Promise<boolean> {
+  let run = autoRuns.get(me)
+  if (!run) {
+    run = (async () => {
+      if (!(await isBackupEnabled(me))) return false
+      if (!isBackupDue(await lastBackupAt(me), await getBackupFrequency(me))) return false
+      try {
+        await backupNow(me, token)
+        return true
+      } catch (err) {
+        console.warn('Automatic backup failed', err)
+        return false
+      }
+    })().finally(() => autoRuns.delete(me))
+    autoRuns.set(me, run)
+  }
+  return run
 }
+
+const autoRuns = new Map<string, Promise<boolean>>()
 
 export async function isRestoreDismissed(me: string): Promise<boolean> {
   return !!(await getPlatform().kv.get(dismissedFor(me)))

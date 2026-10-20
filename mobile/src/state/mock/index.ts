@@ -269,7 +269,7 @@ export function createMockServices(opts: MockOptions = {}): Services {
     privacy.inviteUrl = `https://iris.chat/?add=${privacy.inviteCode}`
   }
   syncInviteUrl()
-  let backup: BackupStatus = { enabled: false }
+  let backup: BackupStatus = { enabled: false, frequency: 'daily' }
   let devices: DeviceInfo[] = [
     { id: 'd1', name: 'This phone', platform: 'android', lastActive: t0, current: true },
     { id: 'd2', name: 'Chrome on Windows', platform: 'web', lastActive: t0 - 2 * HOUR, current: false },
@@ -623,26 +623,39 @@ export function createMockServices(opts: MockOptions = {}): Services {
 
     backup: {
       status: () => wait({ ...backup }, latency / 2),
-      async enable() {
-        backup = { ...backup, enabled: true }
+      async enable(frequency = 'daily') {
+        backup = { ...backup, enabled: true, frequency, lastBackupAt: now(), sizeBytes: 3_412_000, serverBackup: true }
         events.emit('backup')
         await wait(undefined, latency / 2)
         return 'MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK MOCK'
       },
       async disable() {
-        backup = { enabled: false }
+        backup = { enabled: false, frequency: 'daily' }
         events.emit('backup')
         await wait(undefined, latency / 2)
       },
-      async restore() {
-        await wait(undefined, latency * 2)
+      async setFrequency(frequency) {
+        backup = { ...backup, frequency }
+        events.emit('backup')
+        await wait(undefined, latency / 3)
+      },
+      async restore(_key, onPhase) {
+        for (const phase of ['download', 'decrypt', 'merge'] as const) {
+          onPhase?.(phase)
+          await wait(undefined, latency)
+        }
         return 0
       },
       async backupNow() {
         await wait(undefined, latency * 4)
-        backup = { enabled: true, lastBackupAt: now(), sizeBytes: 3_412_000 }
+        backup = { ...backup, enabled: true, lastBackupAt: now(), sizeBytes: 3_412_000, serverBackup: true }
         events.emit('backup')
         return { ...backup }
+      },
+      async finishSetup() {
+        if (session) session = { ...session, setup: undefined }
+        events.emit('session')
+        await wait(undefined, latency / 3)
       },
     },
 

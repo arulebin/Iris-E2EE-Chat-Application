@@ -1,10 +1,14 @@
+import * as Application from 'expo-application'
 import * as Device from 'expo-device'
 import * as Notifications from 'expo-notifications'
-import { AppState } from 'react-native'
+import { AppState, Platform as RNPlatform } from 'react-native'
 import { createMMKV } from 'react-native-mmkv'
 import {
   acknowledgeKeyChange,
   backupNow as coreBackupNow,
+  claimInstallKey,
+  deriveInstallKey,
+  dismissRestore,
   configureCore,
   createMutex,
   deleteMessages,
@@ -13,6 +17,7 @@ import {
   ensureKeyPair,
   fetchBackupMeta,
   formatInviteCode,
+  getBackupFrequency,
   getMessages,
   getTrust,
   getUsername,
@@ -20,8 +25,10 @@ import {
   groupPeer,
   initSignal,
   isBackupEnabled,
+  isEmpty as isHistoryEmpty,
   isSendBlocked,
   lastBackupAt,
+  lastBackupSize,
   loadSafetyNumber,
   logIn,
   maybeAutoBackup,
@@ -30,6 +37,7 @@ import {
   patchMessage,
   resolveContactKeys,
   restoreBackup,
+  setBackupFrequency as coreSetBackupFrequency,
   setVerified as coreSetVerified,
   signalApi,
   signUp,
@@ -55,8 +63,8 @@ import { createKeystoreWrapper, KeystoreKeyMissingError } from '../../platform/k
 import { installLibsignal } from '../../platform/libsignal'
 import { AuthError, ServiceError } from '../services'
 import type {
-  AppSettings, BackupStatus, ChatSummary, Contact, DeviceInfo, FriendRequest, GroupDetail, GroupMember, Message,
-  PrivacyState, SafetyInfo, ServiceEvents, Session, Topic,
+  AppSettings, BackupFrequency, BackupStatus, ChatSummary, Contact, DeviceInfo, FriendRequest, GroupDetail, GroupMember, Message,
+  PrivacyState, RestorePhase, SafetyInfo, ServiceEvents, Session, SetupStep, Topic,
 } from '../services'
 import { digitsOfQr, displayName, messageKey, previewText, toContact, toUiMessage } from './mapping'
 import { conversationLines, parseTaskData, shouldNotify, type TaskData } from '../../notify/format'
@@ -247,7 +255,17 @@ export class Runtime {
       }
       this.backgroundAt = 0
     }
-    if (s === 'background' && a?.ctx) void this.token().then(t => maybeAutoBackup(a.me, t)).catch(() => {})
+    // Automatic backups: whenever the app comes or goes and one is due (single-flight in core).
+    if ((s === 'background' || s === 'active') && a?.ctx) this.autoBackup(a)
+  }
+
+  private autoBackup(a: Acct) {
+    void this.token()
+      .then(t => maybeAutoBackup(a.me, t))
+      .then(done => {
+        if (done && this.acct === a) this.events.emit('backup')
+      })
+      .catch(() => {})
   }
 
   /** The UI is up (foreground, or a screen asked for the session): bring a headless-started account online. */
@@ -364,6 +382,14 @@ export class Runtime {
       getLocks: () => this.locks,
       keyWrapperFor: alias => (IrisKeystore ? createKeystoreWrapper(`iris-${alias}`, IrisKeystore) : null),
       deviceLabel: () => `${Device.modelName ?? 'Phone'} (Iris Android)`,
+      // ANDROID_ID survives an uninstall + reinstall (same signing key, same user), so a reinstall registers
+      // with the same key and the server retires the dead device. Only an HMAC under the username leaves
+      // the phone: unlinkable across accounts, and the raw id is never sent.
+      installKey: async u => {
+        if (RNPlatform.OS !== 'android') return null
+        const id = Application.getAndroidId()
+        return id ? deriveInstallKey(u, id) : null
+      },
     })
     const unread = (await p.kv.get<Record<string, number>>(`rt:unread:${username}`)) ?? {}
     const chatPrefs = (await p.kv.get<ChatPrefs>(`rt:chatprefs:${username}`)) ?? {}
@@ -388,6 +414,8 @@ export class Runtime {
     if (!a) return
     this.acct = null
     a.gen = -1
+    this.setupStep = null
+    this.setupDecision = null
     a.client?.dispose()
     a.socket?.close()
     a.typing.forEach(t => clearTimeout(t))
@@ -465,20 +493,72 @@ export class Runtime {
       void this.refreshGroups().catch(() => {})
       if (!a.socket) this.connect(a)
       void this.enablePush()
-      void maybeAutoBackup(a.me, token).catch(() => {})
-      void this.offerRestore(a, token)
+      this.autoBackup(a)
+      void this.decideSetup(a)
+      void this.claimInstall(a, token)
     })
   }
 
-  private restoreOffered = false
-  private async offerRestore(a: Acct, token: string) {
-    if (!a.ctx?.freshDevice || this.restoreOffered) return
-    this.restoreOffered = true
-    // A new device with a server backup: the Backup screen carries the restore flow; nudge the status.
+  /** Once per device: report the install key so the server retires this phone's dead earlier installs. */
+  private async claimInstall(a: Acct, token: string) {
+    if (!a.ctx) return
     try {
-      const meta = await fetchBackupMeta(token)
-      if (meta.exists) this.events.emit('backup')
-    } catch { /* offline */ }
+      const removed = await claimInstallKey(a.ctx, token, a.platform.kv)
+      if (removed.length) this.events.emit('devices')
+    } catch (e) {
+      console.warn('[runtime] install key claim skipped:', (e as Error)?.message)
+    }
+  }
+
+  // ── post-sign-in setup (restore / back up your chats) ───────────────
+
+  private setupStep: SetupStep | null = null
+  private setupDecision: Promise<void> | null = null
+
+  private setupDoneKey = (me: string) => `setup-done:${me}`
+  private setupStepKey = (me: string) => `setup-step:${me}`
+
+  /**
+   * Decide once per account on this phone whether to show a setup step:
+   *  - a server backup exists and this phone starts empty: 'restore' (before the chat list, like WhatsApp);
+   *  - no backup anywhere and backups are off here: 'backup' (offered once; Settings keeps a gentle banner).
+   * Needs the network; when offline nothing is decided and the next start asks again.
+   */
+  private decideSetup(a: Acct): Promise<void> {
+    this.setupDecision ??= (async () => {
+      if (this.prefsStore.getBoolean(this.setupDoneKey(a.me))) return
+      if (await isBackupEnabled(a.me)) return this.markSetupDone(a.me)
+      // Once offered, the restore stays offered until done or skipped (even if messages arrive meanwhile).
+      const offered = this.prefsStore.getString(this.setupStepKey(a.me))
+      let step: SetupStep | null
+      try {
+        const meta = await fetchBackupMeta(await this.token())
+        if (meta.exists) step = offered === 'restore' || a.ctx?.freshDevice || (await isHistoryEmpty(a.me)) ? 'restore' : null
+        else step = 'backup'
+      } catch {
+        this.setupDecision = null // offline: try again on the next start
+        return
+      }
+      if (this.acct !== a) return
+      if (!step) return this.markSetupDone(a.me)
+      this.prefsStore.set(this.setupStepKey(a.me), step)
+      this.setupStep = step
+      this.events.emit('session')
+    })()
+    return this.setupDecision
+  }
+
+  private markSetupDone(me: string) {
+    this.prefsStore.set(this.setupDoneKey(me), true)
+    this.prefsStore.remove(this.setupStepKey(me))
+    this.setupStep = null
+  }
+
+  async finishSetup(step: SetupStep): Promise<void> {
+    const a = this.need()
+    if (step === 'restore') await dismissRestore(a.me).catch(() => {})
+    this.markSetupDone(a.me)
+    this.events.emit('session')
   }
 
   private socketLike(a: Acct) {
@@ -861,6 +941,7 @@ export class Runtime {
       username: a.me,
       displayName: a.profile ? displayName(a.profile) : a.me,
       locked: this.appLockLocked || a.needsPassword,
+      setup: this.setupStep ?? undefined,
     }
   }
 
@@ -916,8 +997,12 @@ export class Runtime {
   private async afterAuth(a: Acct): Promise<Session> {
     this.prefsStore.set('lastUser', a.me)
     this.appLockLocked = false
-    this.restoreOffered = false
+    this.setupStep = null
+    this.setupDecision = null
     await this.activate(a)
+    // A fresh phone with a backup restores BEFORE the chat list shows: decide while the sign-in spinner runs
+    // (bounded, so a slow network never blocks sign-in; the decision then lands a moment later).
+    if (a.client) await Promise.race([this.decideSetup(a), new Promise(r => setTimeout(r, 6_000))])
     const p = await this.apiJson<UserProfile>(`/api/users/${encodeURIComponent(a.me)}`).catch(() => undefined)
     if (p) a.profile = p
     this.events.emit('session')
@@ -1516,14 +1601,23 @@ export class Runtime {
 
   async backupStatus(): Promise<BackupStatus> {
     const a = this.need()
-    const enabled = await isBackupEnabled(a.me)
-    const last = await lastBackupAt(a.me)
+    const [enabled, last, size, frequency] = await Promise.all([
+      isBackupEnabled(a.me), lastBackupAt(a.me), lastBackupSize(a.me), getBackupFrequency(a.me),
+    ])
     const meta = await fetchBackupMeta(await this.token()).catch(() => null)
-    return { enabled, lastBackupAt: last ?? undefined, sizeBytes: meta?.size, serverBackup: !!meta?.exists }
+    const serverAt = meta?.updatedAt ? Date.parse(meta.updatedAt) : undefined
+    return {
+      enabled,
+      frequency,
+      lastBackupAt: last ?? serverAt,
+      sizeBytes: (last ? size : null) ?? meta?.size,
+      serverBackup: meta ? !!meta.exists : undefined,
+    }
   }
 
-  async enableBackup(): Promise<string> {
+  async enableBackup(frequency: BackupFrequency = 'daily'): Promise<string> {
     const a = this.need()
+    await coreSetBackupFrequency(a.me, frequency)
     const key = await enableBackup(a.me, await this.token())
     this.events.emit('backup')
     return key
@@ -1535,6 +1629,13 @@ export class Runtime {
     this.events.emit('backup')
   }
 
+  async setBackupFrequency(frequency: BackupFrequency) {
+    const a = this.need()
+    await coreSetBackupFrequency(a.me, frequency)
+    this.events.emit('backup')
+    this.autoBackup(a)
+  }
+
   async backupNow(): Promise<BackupStatus> {
     const a = this.need()
     await coreBackupNow(a.me, await this.token())
@@ -1542,12 +1643,13 @@ export class Runtime {
     return this.backupStatus()
   }
 
-  async restore(recoveryKey: string): Promise<number> {
+  async restore(recoveryKey: string, onPhase?: (phase: RestorePhase) => void): Promise<number> {
     const a = this.need()
-    const n = await restoreBackup(a.me, await this.token(), recoveryKey)
+    const n = await restoreBackup(a.me, await this.token(), recoveryKey, { onPhase })
     a.lastCache.clear()
     this.events.emit('chats')
     for (const u of a.users) this.events.emit(`messages:${u.username}` as Topic)
+    for (const g of a.groups) this.events.emit(`messages:${g.id}` as Topic)
     this.events.emit('backup')
     return n
   }

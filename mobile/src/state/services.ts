@@ -17,7 +17,14 @@ export interface Session {
   displayName: string
   /** True while the app lock / unlock screen must be shown. */
   locked: boolean
+  /**
+   * A one-time setup step after sign-in on this phone: 'restore' = a server backup exists and this phone
+   * starts empty (shown BEFORE the chat list), 'backup' = no backup anywhere yet (offered once).
+   */
+  setup?: SetupStep
 }
+
+export type SetupStep = 'restore' | 'backup'
 
 export interface Contact {
   id: string
@@ -134,13 +141,21 @@ export interface SafetyInfo {
   verified: boolean
 }
 
+/** Automatic backup schedule. 'manual' = only when the user taps "Back up now". */
+export type BackupFrequency = 'daily' | 'weekly' | 'manual'
+
 export interface BackupStatus {
+  /** This phone holds the recovery key and keeps the backup up to date. */
   enabled: boolean
+  frequency: BackupFrequency
+  /** epoch ms of the last backup: this phone's own, else the server copy's. */
   lastBackupAt?: number
   sizeBytes?: number
   /** A backup exists on the server (this account), whether or not this device keeps it up to date. */
   serverBackup?: boolean
 }
+
+export type RestorePhase = 'download' | 'decrypt' | 'merge'
 
 export interface DeviceInfo {
   id: string
@@ -237,12 +252,18 @@ export interface SafetyService {
 
 export interface BackupService {
   status(): Promise<BackupStatus>
-  /** Turn backups on. Resolves the recovery key (shown to the user exactly once). */
-  enable(): Promise<string>
+  /**
+   * Turn backups on (replacing any server backup) and upload the first one right away. Resolves the
+   * recovery key, shown to the user exactly once.
+   */
+  enable(frequency?: BackupFrequency): Promise<string>
   disable(): Promise<void>
   backupNow(): Promise<BackupStatus>
+  setFrequency(frequency: BackupFrequency): Promise<void>
   /** Restore this account's server backup with the recovery key. Resolves the number of messages restored. */
-  restore(recoveryKey: string): Promise<number>
+  restore(recoveryKey: string, onPhase?: (phase: RestorePhase) => void): Promise<number>
+  /** The post-sign-in setup step was completed or skipped: never show it again on this phone. */
+  finishSetup(step: SetupStep): Promise<void>
 }
 
 export interface DevicesService {

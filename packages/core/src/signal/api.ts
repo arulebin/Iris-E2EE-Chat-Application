@@ -60,8 +60,11 @@ export const signalApi = {
     }
   },
 
-  registerDevice: (token: string, body: { registrationId: number; label: string; signedPreKey: SignedPreKeyDto; preKeys: PreKeyDto[] }) =>
+  registerDevice: (token: string, body: { registrationId: number; label: string; signedPreKey: SignedPreKeyDto; preKeys: PreKeyDto[]; installKey?: string | null }) =>
     call<{ deviceId: number }>(token, 'POST', '/devices', body),
+  /** Report the install key of an already-registered device; the server retires this phone's dead installs. */
+  claimInstallKey: (token: string, deviceId: number, installKey: string) =>
+    call<{ removed: number[] }>(token, 'POST', `/devices/${deviceId}/install-key`, { installKey }),
   devicesOf: (token: string, username: string) => call<DeviceDto[]>(token, 'GET', `/devices/${enc(username)}`),
   removeDevice: (token: string, deviceId: number) => call<void>(token, 'DELETE', `/devices/${deviceId}`),
   uploadPreKeys: (token: string, deviceId: number, preKeys: PreKeyDto[]) =>

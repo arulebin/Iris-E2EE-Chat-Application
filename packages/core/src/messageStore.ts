@@ -163,16 +163,35 @@ export class HistoryStore {
     return out
   }
 
+  /**
+   * Merge a backup into local history. A message already here (same server id) keeps its LOCAL copy, which
+   * is at least as fresh (it may have been viewed, edited or have arrived on this device meanwhile); the
+   * backup only fills fields the local copy lacks. Messages that arrived during the restore are untouched.
+   * Returns how many of the backup's messages were new here.
+   */
   async importAll(conversations: Record<string, ChatMessage[]>): Promise<number> {
-    let count = 0
+    let added = 0
     for (const [peer, list] of Object.entries(conversations)) {
       if (!Array.isArray(list)) continue
       // Only settled messages: a pending clientId-only entry from another device can't be reconciled here.
       const settled = list.filter(m => m && m.id != null && typeof m.sentAt === 'string')
-      await this.upsertMany(peer, settled)
-      count += settled.length
+      if (!settled.length) continue
+      await this.mutate(this.v2Slot(peer), local => {
+        const byId = new Map(local.filter(m => m.id != null).map((m, i) => [m.id!, i]))
+        const next = [...local]
+        for (const m of settled) {
+          const i = byId.get(m.id!)
+          if (i === undefined) {
+            byId.set(m.id!, next.push(m) - 1)
+            added++
+          } else {
+            next[i] = { ...m, ...next[i] }
+          }
+        }
+        return next.sort(bySentAt)
+      })
     }
-    return count
+    return added
   }
 
   async isEmpty(): Promise<boolean> {

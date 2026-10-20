@@ -77,10 +77,12 @@ export function createRealServices(rt: Runtime = getRuntime()): Services {
     safety: { get: id => rt.safety(id), setVerified: (id, v) => rt.setVerified(id, v) },
     backup: {
       status: () => rt.backupStatus(),
-      enable: () => rt.enableBackup(),
+      enable: f => rt.enableBackup(f),
       disable: () => rt.disableBackup(),
       backupNow: () => rt.backupNow(),
-      restore: k => rt.restore(k),
+      setFrequency: f => rt.setBackupFrequency(f),
+      restore: (k, onPhase) => rt.restore(k, onPhase),
+      finishSetup: step => rt.finishSetup(step),
     },
     devices: { list: () => rt.devices(), revoke: id => rt.revokeDevice(id) },
     settings: {

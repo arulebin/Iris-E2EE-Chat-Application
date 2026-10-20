@@ -1,7 +1,7 @@
 import Constants from 'expo-constants'
 import { useRouter } from 'expo-router'
 import { Alert, Pressable, StyleSheet, View } from 'react-native'
-import { useBlocked, useProfile, useServices, useSettings } from '@/state/hooks'
+import { useBackup, useBlocked, useProfile, useServices, useSettings } from '@/state/hooks'
 import { Avatar } from '@/ui/components/Avatar'
 import { ListItem, Section } from '@/ui/components/ListItem'
 import { Page } from '@/ui/components/Page'
@@ -20,6 +20,7 @@ export default function Settings() {
   const profile = useProfile().data
   const blocked = useBlocked().data
   const { settings, update } = useSettings()
+  const backupStatus = useBackup().data
 
   return (
     <Page title="Settings">
@@ -38,6 +39,24 @@ export default function Settings() {
         </View>
         <Icon name="chevron-forward" size={20} color={t.muted} />
       </Pressable>
+
+      {backupStatus && !backupStatus.enabled ? (
+        <Pressable
+          onPress={() => router.push('/settings/backup')}
+          accessibilityRole="button"
+          accessibilityLabel="Back up your chats. Your messages are only on this phone."
+          style={[styles.banner, { backgroundColor: t.primarySoft }]}
+        >
+          <Icon name="cloud-upload" size={24} color={t.primary} />
+          <View style={{ flex: 1 }}>
+            <Text weight="semibold">Back up your chats</Text>
+            <Text variant="small" tone="soft">
+              Your messages are only on this phone. Turn on backups so a new or reinstalled phone can get them back.
+            </Text>
+          </View>
+          <Icon name="chevron-forward" size={18} color={t.primary} />
+        </Pressable>
+      ) : null}
 
       <Section title="Account">
         <ListItem icon="person" title="Profile" subtitle="Name and avatar" chevron onPress={() => router.push('/settings/profile')} />
@@ -58,7 +77,13 @@ export default function Settings() {
           }}
         />
         <ListItem icon="phone-portrait" title="Linked devices" chevron onPress={() => router.push('/settings/devices')} />
-        <ListItem icon="cloud-upload" title="Backup" chevron onPress={() => router.push('/settings/backup')} />
+        <ListItem
+          icon="cloud-upload"
+          title="Chat backup"
+          subtitle={!backupStatus ? undefined : backupStatus.enabled ? (backupStatus.frequency === 'manual' ? 'On, manual' : `On, ${backupStatus.frequency}`) : 'Off'}
+          chevron
+          onPress={() => router.push('/settings/backup')}
+        />
       </Section>
 
       <Section title="App">
@@ -96,5 +121,6 @@ export default function Settings() {
 }
 
 const styles = StyleSheet.create({
+  banner: { flexDirection: 'row', alignItems: 'center', gap: 14, marginHorizontal: 16, marginTop: 14, padding: 16, borderRadius: 20 },
   profile: { flexDirection: 'row', alignItems: 'center', gap: 14, marginHorizontal: 16, marginTop: 8, padding: 16, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth },
 })

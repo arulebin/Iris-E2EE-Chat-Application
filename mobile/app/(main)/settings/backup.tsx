@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { View } from 'react-native'
-import * as Clipboard from 'expo-clipboard'
+import { Alert, View } from 'react-native'
 import { useBackup, useServices } from '@/state/hooks'
+import type { BackupFrequency } from '@/state/services'
 import { Button } from '@/ui/components/Button'
 import { Field } from '@/ui/components/Field'
 import { ListItem, Section } from '@/ui/components/ListItem'
@@ -9,98 +9,131 @@ import { Page } from '@/ui/components/Page'
 import { Sheet } from '@/ui/components/Sheet'
 import { Text } from '@/ui/components/Text'
 import { useToast } from '@/ui/components/Toast'
-
-function fmtSize(b?: number) {
-  if (!b) return ''
-  return b > 1_000_000 ? `${(b / 1_000_000).toFixed(1)} MB` : `${Math.round(b / 1000)} KB`
-}
+import { FrequencyPicker, RecoveryKeyView, fmtBackupTime, fmtBytes } from '@/ui/components/backup'
 
 export default function Backup() {
   const q = useBackup()
   const { backup } = useServices()
   const toast = useToast()
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState<null | 'enable' | 'now' | 'restore' | 'off'>(null)
   const [key, setKey] = useState<string | null>(null)
   const [restoreOpen, setRestoreOpen] = useState(false)
   const [restoreKey, setRestoreKey] = useState('')
   const s = q.data
 
-  const run = async (fn: () => Promise<void>) => {
-    setBusy(true)
+  const run = async (what: NonNullable<typeof busy>, fn: () => Promise<void>) => {
+    setBusy(what)
     try {
       await fn()
     } catch (e) {
       toast.show((e as Error).message || 'Something went wrong', 'error')
     } finally {
-      setBusy(false)
+      setBusy(null)
     }
   }
 
+  const turnOn = () => {
+    const go = () => run('enable', async () => setKey(await backup.enable('daily')))
+    if (s?.serverBackup) {
+      Alert.alert(
+        'Replace the existing backup?',
+        'A backup made with another recovery key is on the server. Turning backups on here replaces it with this phone\'s chats. To keep those messages, restore that backup first.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Restore first', onPress: () => setRestoreOpen(true) },
+          { text: 'Replace', style: 'destructive', onPress: go },
+        ],
+      )
+    } else go()
+  }
+
+  const turnOff = () =>
+    Alert.alert('Turn off backups?', 'The backup is deleted from the server. If you lose or reinstall this phone, your messages cannot be recovered.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Turn off', style: 'destructive', onPress: () => void run('off', () => backup.disable()) },
+    ])
+
+  const last = s?.lastBackupAt ? `${fmtBackupTime(s.lastBackupAt)}${s.sizeBytes ? ` · ${fmtBytes(s.sizeBytes)}` : ''}` : 'Never'
+
   return (
-    <Page title="Backup">
-      <View style={{ padding: 20 }}>
+    <Page title="Chat backup">
+      <View style={{ padding: 20, gap: 8 }}>
         <Text tone="muted">
-          Messages are end-to-end encrypted with forward secrecy, so a new device starts empty. An encrypted backup, locked with a recovery key only you have, lets you bring your history along.
+          Your messages are stored only on this phone. Back them up to Iris&apos;s server, end-to-end encrypted with a recovery key only you have, so you can restore them if you change or reinstall your phone. Photos and videos are included while they are still on the server.
         </Text>
       </View>
-      <Section title="Encrypted backup">
-        <ListItem
-          icon="cloud-upload"
-          title="Automatic backup"
-          subtitle="Daily, in the background"
-          value={s?.enabled ?? false}
-          disabled={!s || busy}
-          onValueChange={v =>
-            run(async () => {
-              if (v) setKey(await backup.enable())
-              else await backup.disable()
-            })
-          }
-        />
-        <ListItem icon="time" title="Last backup" subtitle={s?.lastBackupAt ? `${new Date(s.lastBackupAt).toLocaleString()}${s.sizeBytes ? ` (${fmtSize(s.sizeBytes)})` : ''}` : 'Never'} />
+
+      <Section title="Last backup">
+        <ListItem icon="time" title={last} subtitle={s?.enabled ? 'Backed up from this phone' : s?.serverBackup ? 'Backup on the server, not updated from this phone' : 'No backup yet'} />
       </Section>
-      <View style={{ padding: 20, gap: 10 }}>
-        <Button
-          title="Back up now"
-          icon="cloud-upload"
-          loading={busy}
-          disabled={!s?.enabled}
-          onPress={() =>
-            run(async () => {
-              await backup.backupNow()
-              toast.show('Backup complete', 'success')
-            })
-          }
-        />
-        <Button title="Restore from backup" variant="secondary" icon="cloud-download" onPress={() => setRestoreOpen(true)} />
-      </View>
+
+      {s?.enabled ? (
+        <>
+          <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+            <Button
+              title="Back up now"
+              icon="cloud-upload"
+              loading={busy === 'now'}
+              disabled={!!busy}
+              onPress={() =>
+                run('now', async () => {
+                  await backup.backupNow()
+                  toast.show('Backup complete', 'success')
+                })
+              }
+            />
+          </View>
+          <Section title="Back up automatically">
+            <FrequencyPicker
+              value={s.frequency}
+              options={['daily', 'weekly', 'manual']}
+              disabled={!!busy}
+              onChange={f => void run('now', () => backup.setFrequency(f as BackupFrequency))}
+            />
+          </Section>
+          <Section>
+            <ListItem icon="cloud-offline" title="Turn off backups" destructive disabled={!!busy} onPress={turnOff} />
+          </Section>
+        </>
+      ) : (
+        <View style={{ paddingHorizontal: 20, gap: 10 }}>
+          <Button title="Turn on backups" icon="cloud-upload" loading={busy === 'enable'} disabled={!s || !!busy} onPress={turnOn} />
+          {busy === 'enable' ? (
+            <Text variant="small" tone="muted" align="center">
+              Encrypting and uploading your first backup…
+            </Text>
+          ) : null}
+        </View>
+      )}
+
+      {s?.serverBackup ? (
+        <View style={{ padding: 20 }}>
+          <Button title="Restore from backup" variant="secondary" icon="cloud-download" disabled={!!busy} onPress={() => setRestoreOpen(true)} />
+        </View>
+      ) : null}
 
       <Sheet visible={!!key} onClose={() => setKey(null)} title="Your recovery key">
-        <View style={{ padding: 20, gap: 14 }}>
-          <Text weight="bold" selectable style={{ letterSpacing: 1 }}>
-            {key}
-          </Text>
-          <Text tone="muted" variant="small">
-            Write this down and keep it somewhere safe. It is shown only once, and without it the backup cannot be opened, not even by Iris.
-          </Text>
-          <Button title="Copy" variant="secondary" icon="copy" onPress={() => Clipboard.setStringAsync(key ?? '').then(() => toast.show('Copied', 'success'))} />
-          <Button title="I have saved it" onPress={() => setKey(null)} />
+        <View style={{ padding: 20 }}>
+          {key ? <RecoveryKeyView recoveryKey={key} onDone={() => setKey(null)} /> : null}
         </View>
       </Sheet>
 
-      <Sheet visible={restoreOpen} onClose={() => setRestoreOpen(false)} title="Restore messages">
+      <Sheet visible={restoreOpen} onClose={() => (busy ? undefined : setRestoreOpen(false))} title="Restore messages">
         <View style={{ padding: 20, gap: 14 }}>
-          <Field label="Recovery key" value={restoreKey} onChangeText={setRestoreKey} autoCapitalize="characters" autoCorrect={false} placeholder="XXXX XXXX XXXX ..." />
+          <Text tone="muted" variant="small">
+            Messages already on this phone are kept; the backup adds what is missing.
+          </Text>
+          <Field label="Recovery key" value={restoreKey} onChangeText={setRestoreKey} autoCapitalize="characters" autoCorrect={false} placeholder="XXXX XXXX XXXX …" />
           <Button
             title="Restore"
-            loading={busy}
-            disabled={restoreKey.trim().length < 8}
+            loading={busy === 'restore'}
+            disabled={restoreKey.replace(/[\s-]/g, '').length < 52 || !!busy}
             onPress={() =>
-              run(async () => {
+              run('restore', async () => {
                 const n = await backup.restore(restoreKey)
                 setRestoreOpen(false)
                 setRestoreKey('')
-                toast.show(`Restored ${n} messages`, 'success')
+                toast.show(n ? `Restored ${n} messages` : 'Your chats are up to date', 'success')
               })
             }
           />

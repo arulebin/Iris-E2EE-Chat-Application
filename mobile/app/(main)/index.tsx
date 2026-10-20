@@ -1,11 +1,11 @@
 import { FlashList } from '@shopify/flash-list'
 import { LinearGradient } from 'expo-linear-gradient'
-import { useRouter } from 'expo-router'
+import { useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useMemo, useRef, useState } from 'react'
-import { Pressable, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native'
+import { BackHandler, Pressable, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native'
 import Animated, { FadeIn, FadeOut, interpolate, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useChats, useProfile, useRequests, useServices } from '@/state/hooks'
+import { useChats, useProfile, useRequests, useServices, useSession } from '@/state/hooks'
 import type { ChatSummary } from '@/state/services'
 import { Avatar } from '@/ui/components/Avatar'
 import { ChatRow } from '@/ui/components/ChatRow'
@@ -72,6 +72,38 @@ export default function ChatListScreen() {
     setTab(next)
     pager.current?.scrollTo({ x: next === 'chats' ? 0 : width, animated: true })
   }
+
+  // "Back up your chats", offered once after sign-in when the account has no backup yet.
+  const setup = useSession()?.setup
+  const offeredBackup = useRef(false)
+  useFocusEffect(
+    useCallback(() => {
+      if (setup !== 'backup' || offeredBackup.current) return
+      offeredBackup.current = true
+      router.push('/backup-setup')
+    }, [setup, router]),
+  )
+
+  // Back on the chat list first closes search, then returns from the Groups tab; only then does it leave
+  // (the activity moves to the background, see plugins/withBackToBackground.js).
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        if (searching) {
+          setQuery('')
+          setSearching(false)
+          return true
+        }
+        if (tab !== 'chats') {
+          setTab('chats')
+          pager.current?.scrollTo({ x: 0, animated: true })
+          return true
+        }
+        return false
+      })
+      return () => sub.remove()
+    }, [searching, tab]),
+  )
 
   const indicator = useAnimatedStyle(() => ({ transform: [{ translateX: interpolate(scrollX.value, [0, width], [0, (width - 32) / 2]) }] }))
   const fabScale = useSharedValue(1)

@@ -44,6 +44,12 @@ export type CorePlatform = {
   rsaKeys: RsaKeyCache
   /** Human label for this device, shown in the device list. */
   deviceLabel: () => string
+  /**
+   * Install-stable, per-account key of this device (64 hex chars) or null. The Android app derives it from
+   * ANDROID_ID, which survives a reinstall: registering again from the same phone then replaces the dead
+   * device instead of leaving it to collect messages forever. Browsers have no such id and return null.
+   */
+  installKey: (username: string) => Promise<string | null>
 }
 
 let current: CorePlatform | null = null
@@ -64,6 +70,7 @@ export function configureCore(overrides: Partial<CorePlatform> & Pick<CorePlatfo
     storageKeys: createBytesStorageKeys(crypto),
     rsaKeys: createJwkRsaCache(crypto, () => platform.kv),
     deviceLabel: () => 'Device',
+    installKey: async () => null,
     ...overrides,
     kv,
   }

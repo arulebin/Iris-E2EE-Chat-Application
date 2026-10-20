@@ -137,17 +137,18 @@ async function obtainIdentity(store: SignalStore, master: MasterKey | null, toke
 
 // ── device registration ──────────────────────────────────────────────
 
-async function registerDevice(store: SignalStore, identity: KeyPairType, token: string): Promise<DeviceState> {
+async function registerDevice(me: string, store: SignalStore, identity: KeyPairType, token: string): Promise<DeviceState> {
   const registrationId = KeyHelper.generateRegistrationId()
   const spkId = randomKeyId()
   const signedPreKey = await generateSignedPreKey(store, identity, spkId)
   const firstPreKeyId = randomKeyId()
   const preKeys = await generatePreKeys(store, firstPreKeyId, PREKEY_BATCH)
+  const installKey = await getPlatform().installKey(me).catch(() => null)
 
   let deviceId: number | null = null
   for (let attempt = 0; attempt < 3 && deviceId === null; attempt++) {
     try {
-      deviceId = (await signalApi.registerDevice(token, { registrationId, label: getPlatform().deviceLabel(), signedPreKey, preKeys })).deviceId
+      deviceId = (await signalApi.registerDevice(token, { registrationId, label: getPlatform().deviceLabel(), signedPreKey, preKeys, installKey })).deviceId
     } catch (err) {
       // 409 "retry": two devices raced for the same id.
       if (!(err instanceof HttpError && err.status === 409) || attempt === 2) throw err
@@ -213,13 +214,39 @@ export function initSignal(me: string, master: MasterKey | null, token: string, 
 
 const initQueue = new Map<string, Promise<unknown>>()
 
+const claimSlot = (me: string, deviceId: number) => `iris-install-claimed:${me}:${deviceId}`
+
+/**
+ * Once per device: tell the server this device's install key, so it can retire the dead registrations of
+ * earlier installs on the same phone. Registration already replaced devices with the SAME key; this also
+ * covers devices registered by builds that had no key yet (matched by model label + "not seen since this
+ * device appeared"), and devices registered before the key existed claiming it now.
+ * No-op without a key (browsers) or once done. Returns the ids the server removed.
+ */
+export async function claimInstallKey(ctx: SignalContext, token: string, kv: KV = getPlatform().kv): Promise<number[]> {
+  const slot = claimSlot(ctx.me, ctx.deviceId)
+  if (await kv.get<boolean>(slot)) return []
+  const key = await getPlatform().installKey(ctx.me)
+  if (!key) return []
+  const { removed } = await signalApi.claimInstallKey(token, ctx.deviceId, key)
+  await kv.set(slot, true)
+  return removed ?? []
+}
+
+/** Hex HMAC-SHA256(key = username, message = "iris-install-v1:" + platform id): the install key for `username`. */
+export async function deriveInstallKey(username: string, platformId: string): Promise<string> {
+  const enc = new TextEncoder()
+  const mac = await getPlatform().crypto.hmac('SHA-256', enc.encode(username), enc.encode(`iris-install-v1:${platformId}`))
+  return Array.from(mac, b => b.toString(16).padStart(2, '0')).join('')
+}
+
 async function initSignalOnce(me: string, master: MasterKey | null, token: string, kv: KV): Promise<SignalContext> {
   const store = new SignalStore(me, kv)
   let device = await store.getDevice()
   const identity = await obtainIdentity(store, master, token)
   let freshDevice = false
   if (!device) {
-    device = await registerDevice(store, identity, token)
+    device = await registerDevice(me, store, identity, token)
     freshDevice = true
   }
   const ctx: SignalContext = { me, store, deviceId: device.deviceId, identityKey: identity.pubKey, freshDevice }

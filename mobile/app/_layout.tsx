@@ -67,17 +67,21 @@ function Navigator() {
 
   const signedOut = session === null
   const locked = !!session?.locked
+  // A new / reinstalled phone with a server backup restores before the chat list exists (like WhatsApp).
+  const restoring = !signedOut && !locked && session?.setup === 'restore'
 
   // Protected groups hide screens but do not move the user: send them to the side they belong on
   // (cold start at "/" while signed out has no matching screen otherwise).
   const inAuth = segments[0] === '(auth)'
   const atUnlock = segments[0] === 'unlock'
+  const atRestore = segments[0] === 'restore'
   useEffect(() => {
     if (session === undefined) return
     if (signedOut && !inAuth) router.replace('/welcome')
     else if (!signedOut && locked && !atUnlock) router.replace('/unlock')
-    else if (!signedOut && !locked && (inAuth || atUnlock)) router.replace('/')
-  }, [session, signedOut, locked, inAuth, atUnlock, router])
+    else if (restoring && !atRestore) router.replace('/restore')
+    else if (!signedOut && !locked && !restoring && (inAuth || atUnlock || atRestore)) router.replace('/')
+  }, [session, signedOut, locked, restoring, inAuth, atUnlock, atRestore, router])
 
   if (session === undefined) return null
 
@@ -97,7 +101,10 @@ function Navigator() {
         <Stack.Protected guard={!signedOut && locked}>
           <Stack.Screen name="unlock" options={{ animation: 'fade', gestureEnabled: false }} />
         </Stack.Protected>
-        <Stack.Protected guard={!signedOut && !locked}>
+        <Stack.Protected guard={restoring}>
+          <Stack.Screen name="restore" options={{ animation: 'fade', gestureEnabled: false }} />
+        </Stack.Protected>
+        <Stack.Protected guard={!signedOut && !locked && !restoring}>
           <Stack.Screen name="(main)" options={{ animation: 'fade' }} />
         </Stack.Protected>
         <Stack.Screen name="diagnostics" />
