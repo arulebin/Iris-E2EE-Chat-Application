@@ -36,6 +36,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     // username → that user's open sessions (could be multiple tabs/devices)
     private final Map<String, Set<WebSocketSession>> sessionsByUser = new ConcurrentHashMap<>();
+    private final CallRelay calls;
 
     public ChatWebSocketHandler(
             MessageRepository messageRepository,
@@ -53,6 +54,10 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         this.friendRequestRepository = friendRequestRepository;
         this.signalKeys = signalKeys;
         this.envelopes = envelopes;
+        this.calls = new CallRelay(objectMapper,
+            user -> sessionsByUser.getOrDefault(user, Set.of()),
+            this::isActive,
+            pushNotificationService);
     }
 
     // Only accepted friends may message, call, or see each other's typing/read state.
@@ -74,6 +79,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         userSessions.add(session);
         userStatusService.markOnline(username);
         if (userSessions.size() == 1) broadcastPresence(username, true);
+        calls.onConnect(session, username);
 
         if (Boolean.TRUE.equals(session.getAttributes().get("deviceRevoked"))) {
             session.sendMessage(new TextMessage("{\"type\":\"device-revoked\"}"));
@@ -86,6 +92,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String username = (String) session.getAttributes().get("username");
+        calls.onClose(session, username);
         Set<WebSocketSession> userSessions = sessionsByUser.get(username);
         if (userSessions != null) {
             userSessions.remove(session);
@@ -170,16 +177,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             if (!root.has("to")) return;
             String to = root.get("to").asText();
             if (!areFriends(sender, to)) return;
-            ObjectNode forwarded = ((ObjectNode) root).put("from", sender);
-            if ("call-offer".equals(type)) {
-                sendToOneSession(to, forwarded.toString());
-                if (!isActive(to)) {
-                    // Generic text: push payloads pass through the browser vendor's push service.
-                    pushNotificationService.sendToUser(to, "Iris", "Incoming call", true);
-                }
-            } else {
-                sendToUser(to, forwarded.toString());
-            }
+            calls.handle(session, sender, to, (ObjectNode) root);
             return;
         }
 
@@ -397,13 +395,4 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private void sendToOneSession(String username, String payload) throws IOException {
-        Set<WebSocketSession> userSessions = sessionsByUser.get(username);
-        if (userSessions == null) return;
-        WebSocketSession latest = null;
-        for (WebSocketSession s : userSessions) {
-            if (s.isOpen()) latest = s;
-        }
-        if (latest != null) latest.sendMessage(new TextMessage(payload));
-    }
 }
