@@ -40,3 +40,6 @@ yarn-error.*
 /ios
 /android
 gradle-build.log
+
+# public code-signing certificate (embedded in the app); private keys stay ignored
+!certs/certificate.pem
