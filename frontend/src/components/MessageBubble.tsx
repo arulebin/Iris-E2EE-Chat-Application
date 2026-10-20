@@ -9,6 +9,7 @@ type Props = {
   isOwn: boolean;
   mediaId?: string | null;
   mimeType?: string | null;
+  mediaKey?: string | null;
   viewOnce?: boolean;
   viewedAt?: string | null;
   token?: string | null;
@@ -21,10 +22,12 @@ type Props = {
 function MediaContent({
   mediaId,
   mimeType,
+  mediaKey,
   token,
 }: {
   mediaId: string;
   mimeType: string | null | undefined;
+  mediaKey: string | null | undefined;
   token: string;
 }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -32,7 +35,7 @@ function MediaContent({
 
   useEffect(() => {
     let cancelled = false;
-    fetchMediaObjectURL(mediaId, token)
+    fetchMediaObjectURL(mediaId, token, mediaKey, mimeType)
       .then((url) => {
         if (cancelled) return;
         setSrc(url);
@@ -41,7 +44,7 @@ function MediaContent({
     return () => {
       cancelled = true;
     };
-  }, [mediaId, token]);
+  }, [mediaId, token, mediaKey, mimeType]);
 
   if (error) {
     return <div className="text-xs text-danger italic">[{error}]</div>;
@@ -152,6 +155,7 @@ export function MessageBubble({
   isOwn,
   mediaId,
   mimeType,
+  mediaKey,
   viewOnce,
   viewedAt,
   token,
@@ -200,7 +204,7 @@ export function MessageBubble({
         <div className="flex flex-col gap-1 max-w-full">
           {replyTo && <ReplyPreview replyTo={replyTo} isOwnBubble={isOwn} />}
           <div onClick={() => onOpenSnap && onOpenSnap()} className="cursor-pointer">
-            <MediaContent mediaId={mediaId!} mimeType={mimeType} token={token!} />
+            <MediaContent mediaId={mediaId!} mimeType={mimeType} mediaKey={mediaKey} token={token!} />
           </div>
           {content && (
             <div

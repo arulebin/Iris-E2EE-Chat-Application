@@ -24,6 +24,9 @@ export type ChatMessage = {
   encryptedKeyForRecipient?: string | null;
   mediaId?: string | null;
   mimeType?: string | null;
+  // Client-only: AES key for E2E media, recovered from the decrypted envelope.
+  // Absent for legacy (server-encrypted-at-rest) media.
+  mediaKey?: string | null;
   viewOnce?: boolean;
   viewedAt?: string | null;
   sentAt: string;

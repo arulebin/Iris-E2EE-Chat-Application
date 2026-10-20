@@ -290,3 +290,44 @@ export async function decryptMessage(
   const ptBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ct)
   return new TextDecoder().decode(ptBuffer)
 }
+
+// ── media (photos / videos / snaps) ────────────────────────────────
+
+/** Bytes AES-GCM adds to a media blob: 12-byte IV + 16-byte auth tag. */
+export const MEDIA_CRYPTO_OVERHEAD = IV_BYTES + 16
+
+/**
+ * Encrypt media bytes under a fresh, single-use AES-256-GCM key.
+ * Returns iv || ciphertext (what gets uploaded) and the raw key as base64 —
+ * the key never reaches the server in the clear; it rides inside the
+ * E2E-encrypted chat message.
+ */
+export async function encryptMediaBytes(
+  plaintext: ArrayBuffer,
+): Promise<{ ciphertext: Uint8Array<ArrayBuffer>; key: string }> {
+  const aesKey = await crypto.subtle.generateKey(AES_PARAMS, true, ['encrypt', 'decrypt'])
+  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
+  const ctBuffer = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, aesKey, plaintext)
+
+  const combined = new Uint8Array(new ArrayBuffer(iv.length + ctBuffer.byteLength))
+  combined.set(iv, 0)
+  combined.set(new Uint8Array(ctBuffer), iv.length)
+
+  const rawKey = await crypto.subtle.exportKey('raw', aesKey)
+  return { ciphertext: combined, key: uint8ToBase64(new Uint8Array(rawKey)) }
+}
+
+/** Inverse of encryptMediaBytes. Throws OperationError on a wrong key or tampered blob. */
+export async function decryptMediaBytes(packed: ArrayBuffer, keyB64: string): Promise<ArrayBuffer> {
+  const aesKey = await crypto.subtle.importKey(
+    'raw',
+    base64ToUint8(keyB64),
+    { name: 'AES-GCM' },
+    false,
+    ['decrypt'],
+  )
+  const combined = new Uint8Array(packed)
+  const iv = combined.slice(0, IV_BYTES)
+  const ct = combined.slice(IV_BYTES)
+  return crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ct)
+}

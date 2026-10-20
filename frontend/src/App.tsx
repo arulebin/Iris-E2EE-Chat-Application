@@ -12,7 +12,7 @@ import { createPeerConnection, type CallSignal } from "./webrtc";
 import { playRingback, playRingtone, stopTone } from "./lib/sound";
 import type { ChatMessage, CallState, CallMode, UserProfile, FriendRequest } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
-import { uploadMedia } from "./lib/media";
+import { uploadMedia, buildMediaEnvelope, parseMediaEnvelope } from "./lib/media";
 import { apiBase, wsURL } from "./lib/config";
 
 import { AppShell } from "./components/AppShell";
@@ -297,6 +297,12 @@ function App() {
       if (!encryptedKey) return msg;
       try {
         const plaintext = await decryptMessage(msg.content, encryptedKey, privateKey);
+        // E2E media: the decrypted content is an envelope carrying the blob key,
+        // the real MIME type, and the caption.
+        const envelope = msg.mediaId ? parseMediaEnvelope(plaintext) : null;
+        if (envelope) {
+          return { ...msg, content: envelope.caption, mediaKey: envelope.key, mimeType: envelope.mime };
+        }
         return { ...msg, content: plaintext };
       } catch (err) {
         console.error("Decryption failed", err);
@@ -451,23 +457,34 @@ function App() {
   }
 
   // ── send a photo or video ───────────────────────────────────────
-  // Server-side encryption at rest (master key on server). The text-encryption
-  // fields are unused here — we send "" as content with no AES wrapper.
+  // End-to-end: the file is AES-GCM encrypted in the browser and uploaded as an
+  // opaque blob. Its key + real MIME type travel in an envelope that is encrypted
+  // exactly like a text message, so the server only ever sees ciphertext and a
+  // coarse "image/*" / "video/*" hint.
   // viewOnce=true marks the message as a snap; the server will delete the
   // encrypted file on the recipient's first GET.
   async function sendMedia(file: File, viewOnce: boolean) {
     if (!token || !recipient || wsRef.current?.readyState !== WebSocket.OPEN) {
       throw new Error("Not connected");
     }
-    const { mediaId, mimeType } = await uploadMedia(file, token);
+    if (!myPublicKey || !recipientPublicKey) {
+      throw new Error("Encryption keys not ready");
+    }
+    const { mediaId, mimeType, wireMimeType, key } = await uploadMedia(file, token);
+    const enc = await encryptMessage(
+      buildMediaEnvelope(key, mimeType),
+      myPublicKey,
+      recipientPublicKey,
+    );
+    if (wsRef.current?.readyState !== WebSocket.OPEN) throw new Error("Not connected");
     wsRef.current.send(
       JSON.stringify({
         to: recipient,
-        content: "",
-        encryptedKeyForSender: null,
-        encryptedKeyForRecipient: null,
+        content: enc.ciphertext,
+        encryptedKeyForSender: enc.encryptedKeyForSender,
+        encryptedKeyForRecipient: enc.encryptedKeyForRecipient,
         mediaId,
-        mimeType,
+        mimeType: wireMimeType,
         viewOnce,
         replyToId: replyTo?.id ?? null,
       }),
