@@ -63,10 +63,10 @@ export async function openEncryptedKV(opts: {
   const stored = boot.getString(WRAPPED_KEY)
   let keyStr: string
   if (stored) {
-    keyStr = new TextDecoder().decode(await opts.wrapper.unwrap(fromBase64(stored)))
+    keyStr = new TextDecoder().decode(await opts.wrapper.unwrap(stored))
   } else {
     keyStr = toBase64(await opts.crypto.randomBytes(12))
-    boot.set(WRAPPED_KEY, toBase64(await opts.wrapper.wrap(utf8(keyStr))))
+    boot.set(WRAPPED_KEY, await opts.wrapper.wrap(utf8(keyStr)))
   }
   return new MmkvKV(opts.createMmkv({ id, encryptionKey: keyStr }))
 }

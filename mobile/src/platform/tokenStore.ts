@@ -1,4 +1,4 @@
-import { fromBase64, toBase64, utf8, type KeyWrapper, type KV, type TokenStore } from '@iris/core'
+import { utf8, type KeyWrapper, type KV, type TokenStore } from '@iris/core'
 
 /**
  * Access + refresh tokens persisted ONLY as Keystore-wrapped blobs (never plain AsyncStorage /
@@ -11,7 +11,7 @@ export function createWrappedTokenStore(kv: KV, wrapper: KeyWrapper, prefix = 'a
     const blob = await kv.get<string>(prefix + name)
     if (!blob) return null
     try {
-      return new TextDecoder().decode(await wrapper.unwrap(fromBase64(blob)))
+      return new TextDecoder().decode(await wrapper.unwrap(blob))
     } catch (e) {
       // Key lost: the stored token is unrecoverable; treat as signed out.
       if ((e as Error)?.name === 'KeystoreKeyMissingError') return null
@@ -19,7 +19,7 @@ export function createWrappedTokenStore(kv: KV, wrapper: KeyWrapper, prefix = 'a
     }
   }
   const write = async (name: string, value: string) =>
-    kv.set(prefix + name, toBase64(await wrapper.wrap(utf8(value))))
+    kv.set(prefix + name, await wrapper.wrap(utf8(value)))
 
   return {
     async getAccess() {

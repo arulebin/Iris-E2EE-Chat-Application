@@ -28,7 +28,12 @@ export interface KeyWrapper {
 }
 
 /** The Keystore entry is gone (app data cleared, restored to another device): wrapped data is lost. */
-export class KeystoreKeyMissingError extends Error {}
+export class KeystoreKeyMissingError extends Error {
+  constructor(message = 'Keystore key for this alias is missing') {
+    super(message)
+    this.name = 'KeystoreKeyMissingError'
+  }
+}
 
 /** In-memory KV for tests and ephemeral sessions. */
 export class MemoryKV implements KV {

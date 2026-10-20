@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { MemoryKV, type KeyWrapper } from '@iris/core'
+import { MemoryKV, fromBase64, toBase64, type KeyWrapper } from '@iris/core'
 import type { IrisKeystoreNative } from '../../modules/iris-keystore/src'
 import { createAppLockWrapper, createKeystoreWrapper, KeystoreError, KeystoreKeyMissingError, layerWrappers } from './keystore'
 import { forgetEncryptedKey, MmkvKV, openEncryptedKV, type MmkvFactory, type MmkvLike } from './kv'
@@ -24,12 +24,13 @@ function fakeWrapper(): KeyWrapper & { lost: boolean } {
     name: 'fake',
     lost: false,
     async wrap(p: Uint8Array) {
-      return Uint8Array.from(p, b => b ^ 0x5a)
+      return toBase64(Uint8Array.from(p, b => b ^ 0x5a))
     },
-    async unwrap(c: Uint8Array) {
+    async unwrap(c: string) {
       if (w.lost) throw new KeystoreKeyMissingError()
-      return Uint8Array.from(c, b => b ^ 0x5a)
+      return Uint8Array.from(fromBase64(c), b => b ^ 0x5a)
     },
+    async reset() {},
   }
   return w
 }
@@ -127,19 +128,19 @@ describe('keystore wrappers', () => {
     const n = fakeNative()
     const w = createKeystoreWrapper('acct', n)
     n.reject('KEY_MISSING')
-    await expect(w.unwrap(new Uint8Array(40))).rejects.toBeInstanceOf(KeystoreKeyMissingError)
+    await expect(w.unwrap('AAAA')).rejects.toBeInstanceOf(KeystoreKeyMissingError)
     n.reject('AUTH_REQUIRED')
     const lock = createAppLockWrapper('acct', n)
-    await expect(lock.unwrap(new Uint8Array(40))).rejects.toMatchObject({ code: 'AUTH_REQUIRED' })
-    await expect(lock.unwrap(new Uint8Array(40))).rejects.toBeInstanceOf(KeystoreError)
+    await expect(lock.unwrap('AAAA')).rejects.toMatchObject({ code: 'AUTH_REQUIRED' })
+    await expect(lock.unwrap('AAAA')).rejects.toBeInstanceOf(KeystoreError)
   })
 
   it('layers app lock over keystore and unwraps in reverse order', async () => {
     const order: string[] = []
     const mkw = (name: string): KeyWrapper => ({
-      name,
-      wrap: async p => { order.push('wrap:' + name); return Uint8Array.from([...p, name.charCodeAt(0)]) },
-      unwrap: async c => { order.push('unwrap:' + name); return c.slice(0, -1) },
+      wrap: async p => { order.push('wrap:' + name); return name + ':' + toBase64(p) },
+      unwrap: async c => { order.push('unwrap:' + name); return fromBase64(c.slice(name.length + 1)) },
+      reset: async () => {},
     })
     const l = layerWrappers(mkw('inner'), mkw('outer'))
     const w = await l.wrap(Uint8Array.from([7]))

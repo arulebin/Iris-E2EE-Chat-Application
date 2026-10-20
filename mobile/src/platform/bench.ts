@@ -3,7 +3,7 @@ import {
   createLibsignalWebCrypto,
   createNobleAsyncCurve,
   createNobleCurve,
-  identitySafetyNumber,
+  safetyNumber,
   utf8,
   type CryptoProvider,
 } from '@iris/core'
@@ -101,7 +101,7 @@ export async function runBench(
   {
     const k1 = provider.randomBytes(33)
     const k2 = provider.randomBytes(33)
-    const [ms] = await time(now, () => identitySafetyNumber(provider, 'alice', k1, 'bob', k2))
+    const [ms] = await time(now, () => safetyNumber.identitySafetyNumber(provider, 'alice', k1, 'bob', k2))
     push(row('safety number (2 x 5200 SHA-512)', ms, gates.safety))
   }
 
