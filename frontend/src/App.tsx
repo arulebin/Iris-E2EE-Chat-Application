@@ -43,6 +43,16 @@ import { RestoreBackupPrompt } from "./components/RestoreBackupPrompt";
 import { PrivacySettings } from "./components/PrivacySettings";
 import { AddContactSheet } from "./components/AddContactSheet";
 import { isLegacyShareId } from "./lib/invite";
+import { GroupsPanel } from "./components/GroupsPanel";
+import { CreateGroupSheet } from "./components/CreateGroupSheet";
+import { GroupConversationView } from "./components/GroupConversationView";
+import { JoinGroupPrompt } from "./components/JoinGroupPrompt";
+import type { Tab as ListTab } from "./components/ChatListView";
+import { useGroups } from "./lib/groups/useGroups";
+import type { GroupDto } from "./lib/groups/api";
+import { publishGroupEvent, routeGroupFrame } from "./lib/groups/bus";
+import { groupIdOfPeer } from "./lib/groups/payload";
+import { inviteTokenFromLocation } from "./lib/groups/invite";
 
 // Shown in place of a message we can't open with the current key. Kept as a
 // constant so the cache layer can recognise (and refuse to persist) failures.
@@ -140,8 +150,11 @@ function App() {
   const recipient = chatMatch ? decodeURIComponent(chatMatch[1]) : "";
   const recipientPublicKey = contactKeys?.peer === recipient ? contactKeys.rsaKey : null;
   const recipientIdentity = contactKeys?.peer === recipient ? contactKeys.identityKey : null;
+  const groupMatch = /^\/group\/([^/]+)$/.exec(location.pathname);
+  const openGroupId = groupMatch ? decodeURIComponent(groupMatch[1]) : null;
   const view = location.pathname === "/settings" ? "settings"
              : chatMatch                          ? "chat"
+             : groupMatch                         ? "group"
              :                                     "list";
 
   const [showSplash, setShowSplash] = useState(true);
@@ -156,6 +169,17 @@ function App() {
   const refreshFriendsRef = useRef<(() => void) | null>(null);
 
   const me = getUsername(token);
+
+  // ── groups ───────────────────────────────────────────────────────
+  const { groups, previews: groupPreviews, setGroups } = useGroups(token, me);
+  const openGroup = openGroupId ? groups.find((g) => g.id === openGroupId) ?? null : null;
+  const [listTab, setListTab] = useState<ListTab>("messages");
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  // An invite link (?group=<token>) the app was opened with.
+  const [groupInvite, setGroupInvite] = useState<string | null>(() => inviteTokenFromLocation());
+  const upsertGroup = useCallback((g: GroupDto) => {
+    setGroups((prev) => (prev.some((x) => x.id === g.id) ? prev.map((x) => (x.id === g.id ? g : x)) : [g, ...prev]));
+  }, [setGroups]);
 
   // ── splash for ~900ms on initial mount ──────────────────────────
   useEffect(() => {
@@ -622,6 +646,8 @@ function App() {
             await handleDeviceRevokedRef.current?.();
             return;
           }
+          // Group typing / "seen by" / membership nudges go to the group screens.
+          if (routeGroupFrame(data)) return;
           if (data?.type === "friends-changed") {
             refreshFriendsRef.current?.();
             return;
@@ -650,6 +676,11 @@ function App() {
             const { peer, message } = await client.open(data as { envType: number; body: string; message: V2Meta });
             // Persisted before the ack, so a crash can't lose a forward-secret message.
             ws.send(JSON.stringify({ type: "ack", ids: [data.envelopeId] }));
+            const groupId = groupIdOfPeer(peer);
+            if (groupId) {
+              publishGroupEvent({ kind: "message", groupId, message });
+              return;
+            }
             if (peer === recipientRef.current) {
               appendMessage(message);
               if (message.from === peer) { updatePeerLive(peer, { typing: false }); sendRead(peer); }
@@ -1072,7 +1103,25 @@ function App() {
         />
       )}
 
-      {(view === "list" || (view === "chat" && !recipient)) && (
+      {view === "group" && openGroup && me && (
+        <GroupConversationView
+          key={openGroup.id}
+          group={openGroup}
+          me={me}
+          token={token}
+          friends={users}
+          getSignal={() => signalRef.current}
+          getSocket={() => wsRef.current}
+          onBack={() => navigate(-1)}
+          onLeft={() => {
+            setGroups((prev) => prev.filter((g) => g.id !== openGroup.id));
+            navigate("/", { replace: true });
+          }}
+          onGroupChanged={upsertGroup}
+        />
+      )}
+
+      {(view === "list" || (view === "chat" && !recipient) || (view === "group" && !openGroup)) && (
         <ChatListView
           me={me}
           users={users}
@@ -1085,6 +1134,45 @@ function App() {
           onSendRequest={handleSendRequest}
           onAddByInvite={() => setAddInvite("")}
           onBlockRequest={handleBlockRequest}
+          tab={listTab}
+          onTabChange={setListTab}
+          groupsPanel={
+            <GroupsPanel
+              me={me}
+              groups={groups}
+              previews={groupPreviews}
+              activeGroupId={openGroupId}
+              onOpen={(id) => navigate(`/group/${encodeURIComponent(id)}`)}
+              onCreate={() => setCreatingGroup(true)}
+            />
+          }
+        />
+      )}
+
+      {creatingGroup && (
+        <CreateGroupSheet
+          token={token}
+          friends={users}
+          onClose={() => setCreatingGroup(false)}
+          onCreated={(g) => {
+            setCreatingGroup(false);
+            upsertGroup(g);
+            navigate(`/group/${encodeURIComponent(g.id)}`);
+          }}
+        />
+      )}
+
+      {groupInvite && (
+        <JoinGroupPrompt
+          token={token}
+          inviteToken={groupInvite}
+          onClose={() => { setGroupInvite(null); navigate("/", { replace: true }); }}
+          onJoined={(g) => {
+            setGroupInvite(null);
+            upsertGroup(g);
+            setListTab("groups");
+            navigate(`/group/${encodeURIComponent(g.id)}`, { replace: true });
+          }}
         />
       )}
 

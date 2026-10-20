@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { getLegacyCache, getMessages as getV2Messages } from "../lib/messageStore";
 import { Avatar } from "./Avatar";
 import { apiBase } from "../lib/config";
@@ -53,9 +53,13 @@ type Props = {
   /** Opens the invite-code / QR sheet (the only way to add private profiles). */
   onAddByInvite?: () => void;
   onBlockRequest?: (id: number, username: string) => void;
+  // Groups tab: content + controlled tab (lifted so it survives opening a group).
+  groupsPanel?: ReactNode;
+  tab?: Tab;
+  onTabChange?: (tab: Tab) => void;
 };
 
-type Tab = "messages" | "groups";
+export type Tab = "messages" | "groups";
 
 export function ChatListView({
   me,
@@ -69,8 +73,11 @@ export function ChatListView({
   onSendRequest,
   onAddByInvite,
   onBlockRequest,
+  groupsPanel,
+  tab,
+  onTabChange,
 }: Props) {
-  const activeTab: Tab = "messages";
+  const activeTab: Tab = groupsPanel && tab === "groups" ? "groups" : "messages";
   const [showSearch, setShowSearch] = useState(false);
   const [showRequests, setShowRequests] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -206,23 +213,29 @@ export function ChatListView({
       <div className="px-5 pb-3">
         <div className="bg-muted-soft/40 rounded-full p-1 flex">
           <button
+            onClick={() => onTabChange?.("messages")}
             className={`flex-1 py-2 text-sm font-bold rounded-full transition ${
               activeTab === "messages" ? "bg-primary text-white shadow" : "text-navy"
             }`}
+            aria-pressed={activeTab === "messages"}
           >
             Messages
           </button>
           <button
-            className="flex-1 py-2 text-sm font-bold rounded-full text-muted cursor-not-allowed"
-            disabled
-            title="Groups coming soon"
+            onClick={() => onTabChange?.("groups")}
+            disabled={!groupsPanel}
+            className={`flex-1 py-2 text-sm font-bold rounded-full transition ${
+              activeTab === "groups" ? "bg-primary text-white shadow" : groupsPanel ? "text-navy" : "text-muted cursor-not-allowed"
+            }`}
+            aria-pressed={activeTab === "groups"}
           >
             Groups
           </button>
         </div>
       </div>
 
-      {/* User list */}
+      {activeTab === "groups" ? groupsPanel : (
+      /* User list */
       <div className="flex-1 overflow-y-auto px-2">
         {users.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center px-8 py-20 text-center">
@@ -273,15 +286,16 @@ export function ChatListView({
           </ul>
         )}
       </div>
+      )}
 
       {/* FAB */}
-      <button
+      {activeTab === "messages" && <button
         onClick={() => setShowSearch(true)}
         className="iris-fill absolute bottom-6 right-6 sm:bottom-8 sm:right-8 w-14 h-14 text-white rounded-full shadow-lg flex items-center justify-center transition-transform active:scale-90"
         aria-label="New chat"
       >
         <NewChatIcon />
-      </button>
+      </button>}
 
       {/* ── Search / New Chat sheet ── */}
       {showSearch && (

@@ -3,6 +3,8 @@ import { parseMediaEnvelope } from '../media'
 import { getMessages, upsertMessage } from '../messageStore'
 import { maintainPreKeys, type SignalContext } from './device'
 import { decryptFromDevice, encryptFanout, forgetSession, NotV2Error, wasV2Seen, type WireEnvelope } from './messaging'
+import { decodeGroupPayload, encodeGroupPayload, groupPeer } from '../groups/payload'
+import { encryptGroupFanout, type GroupRecipient } from '../groups/fanout'
 
 // App-facing glue between the Signal layer and the chat WebSocket.
 
@@ -115,13 +117,55 @@ export class SignalClient {
   }
 
   /**
+   * Send one group message: a ciphertext for every device of every member (the
+   * group id travels INSIDE the encryption, see lib/groups/payload). Same
+   * stale-device retry as 1:1. Persists under `group:<id>` and returns it.
+   */
+  async sendGroup(groupId: string, members: GroupRecipient[], body: string, extras: SendExtras = {}): Promise<ChatMessage> {
+    const plaintext = encodeGroupPayload(groupId, body)
+    return withDeviceLock(this.ctx.me, async () => {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const envelopes = await encryptGroupFanout(this.ctx, this.token, members, plaintext)
+        const ws = this.getSocket()
+        if (ws?.readyState !== WebSocket.OPEN) throw new Error('Not connected')
+        const clientId = crypto.randomUUID()
+        const reply = this.await(clientId)
+        ws.send(JSON.stringify({
+          type: 'chat', v: 2, groupId, clientId, envelopes,
+          mediaId: extras.mediaId ?? null,
+          mimeType: extras.mimeType ?? null,
+          viewOnce: false,
+          replyToId: extras.replyToId ?? null,
+        }))
+        const r = await reply
+
+        if (r.type === 'sent') {
+          const msg: ChatMessage = { ...toChatMessage(r.message, body), groupId }
+          await upsertMessage(this.ctx.me, groupPeer(groupId), msg)
+          return msg
+        }
+        if (r.reason === 'device-mismatch') {
+          // Removed members/devices: drop their sessions. New ones: sessions next round.
+          for (const d of r.extra ?? []) await forgetSession(this.ctx.store, d.user, d.deviceId)
+          continue
+        }
+        if (r.reason === 'not-a-member') throw new Error("You're no longer a member of this group")
+        if (r.reason === 'no-snaps-in-groups') throw new Error("Snaps can't be sent to groups")
+        throw new Error(`Message rejected by the server (${r.reason})`)
+      }
+      throw new Error("Could not reach every member's devices — try again")
+    })
+  }
+
+  /**
    * Open one delivered envelope, persist the result, and return it. Idempotent:
    * a message already in local history (redelivery, another tab) isn't decrypted
    * twice — which would fail, since its ratchet key is already used up.
    */
   async open(frame: { envType: number; body: string; message: V2Meta }): Promise<{ peer: string; message: ChatMessage }> {
     const meta = frame.message
-    const peer = meta.from === this.ctx.me ? meta.to : meta.from
+    const groupId = meta.groupId ?? null
+    const peer = groupId ? groupPeer(groupId) : meta.from === this.ctx.me ? meta.to : meta.from
     return withDeviceLock(this.ctx.me, async () => {
       const existing = (await getMessages(this.ctx.me, peer)).find(m => m.id === meta.id)
       if (existing) return { peer, message: existing }
@@ -130,7 +174,11 @@ export class SignalClient {
       try {
         if (meta.senderDeviceId == null) throw new Error('Envelope without sender device')
         const plaintext = await decryptFromDevice(this.ctx.store, meta.from, meta.senderDeviceId, frame.envType, frame.body)
-        message = toChatMessage(meta, plaintext)
+        // The group id inside the ciphertext must match the server's label: a group
+        // message relabelled into another group — or into a 1:1 chat — is rejected.
+        const wrapped = decodeGroupPayload(plaintext)
+        if ((wrapped?.groupId ?? null) !== groupId) throw new Error('Group label mismatch')
+        message = wrapped ? { ...toChatMessage(meta, wrapped.inner), groupId } : toChatMessage(meta, plaintext)
       } catch (err) {
         console.error('Signal decrypt failed', err)
         message = { ...meta, content: UNDECRYPTABLE_V2, v: 2 }

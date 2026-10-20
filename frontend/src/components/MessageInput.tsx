@@ -14,6 +14,8 @@ type Props = {
   disabledHint?: string | null;
   replyTo: ChatMessage | null;
   onCancelReply: () => void;
+  // Groups have no view-once (one viewedAt can't mean "viewed once by everyone").
+  allowSnaps?: boolean;
 };
 
 export function MessageInput({
@@ -25,6 +27,7 @@ export function MessageInput({
   disabledHint,
   replyTo,
   onCancelReply,
+  allowSnaps = true,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -182,7 +185,7 @@ export function MessageInput({
             className="hidden"
             onChange={handleFileInput}
           />
-          <button
+          {allowSnaps && <button
             type="button"
             onClick={() => setSnapMode((s) => !s)}
             className={`p-1 rounded-full transition ${
@@ -193,7 +196,7 @@ export function MessageInput({
             disabled={disabled || uploading || !onSendMedia}
           >
             <TimerIcon />
-          </button>
+          </button>}
           <button
             type="button"
             onClick={() => setCameraOpen(true)}
