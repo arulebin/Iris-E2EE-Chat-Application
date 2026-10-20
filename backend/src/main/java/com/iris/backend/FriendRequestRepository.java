@@ -22,4 +22,12 @@ public interface FriendRequestRepository extends JpaRepository<FriendRequest, Lo
     @Query("SELECT COUNT(fr) > 0 FROM FriendRequest fr WHERE fr.status = 'ACCEPTED' AND " +
            "((fr.fromUser = :a AND fr.toUser = :b) OR (fr.fromUser = :b AND fr.toUser = :a))")
     boolean existsAcceptedBetween(@Param("a") String a, @Param("b") String b);
+
+    // Connected AND neither has blocked the other — the gate for messages, typing,
+    // receipts and calls. (A scalar COUNT subquery rather than NOT EXISTS: H2
+    // short-circuits `COUNT(..) > 0 … AND NOT EXISTS(..)` and ignores the subquery.)
+    @Query("SELECT COUNT(fr) > 0 FROM FriendRequest fr WHERE fr.status = 'ACCEPTED' AND " +
+           "((fr.fromUser = :a AND fr.toUser = :b) OR (fr.fromUser = :b AND fr.toUser = :a)) AND (" +
+           "SELECT COUNT(ub) FROM UserBlock ub WHERE (ub.blocker = :a AND ub.blocked = :b) OR (ub.blocker = :b AND ub.blocked = :a)) = 0")
+    boolean existsAcceptedUnblockedBetween(@Param("a") String a, @Param("b") String b);
 }

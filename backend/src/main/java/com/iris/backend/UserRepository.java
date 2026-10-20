@@ -15,8 +15,17 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     boolean existsByUsername(String username);
 
+    Optional<User> findByInviteCode(String inviteCode);
+
+    boolean existsByInviteCode(String inviteCode);
+
     @Query("SELECT u FROM User u WHERE LOWER(u.username) LIKE LOWER(CONCAT('%', :q, '%')) OR LOWER(u.preferredName) LIKE LOWER(CONCAT('%', :q, '%'))")
     List<User> searchUsers(@Param("q") String q);
+
+    // Search over discoverable accounts only — private profiles are reachable by invite alone.
+    @Query("SELECT u FROM User u WHERE (u.privateProfile IS NULL OR u.privateProfile = false) AND " +
+           "(LOWER(u.username) LIKE LOWER(CONCAT('%', :q, '%')) OR LOWER(u.preferredName) LIKE LOWER(CONCAT('%', :q, '%')))")
+    List<User> searchDiscoverable(@Param("q") String q);
 
     @Query("""
         SELECT DISTINCT u FROM User u

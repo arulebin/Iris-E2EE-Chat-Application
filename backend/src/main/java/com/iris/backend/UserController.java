@@ -22,10 +22,13 @@ public class UserController {
     
     private final UserRepository userRepository;
     private final FriendRequestRepository friendRepository;
+    private final PrivacyService privacy;
 
-    public UserController(UserRepository userRepository, FriendRequestRepository friendRepository) {
+    public UserController(UserRepository userRepository, FriendRequestRepository friendRepository,
+                          PrivacyService privacy) {
         this.userRepository = userRepository;
         this.friendRepository = friendRepository;
+        this.privacy = privacy;
     }
 
     @GetMapping("/users")
@@ -44,24 +47,28 @@ public class UserController {
             contacts.computeIfAbsent(other, name -> userRepository.findByUsername(name).orElse(null));
         }
         contacts.remove(me);
+        privacy.blockedBy(me).forEach(contacts::remove);   // blocked people leave my list
 
         return contacts.values().stream()
                 .filter(Objects::nonNull)
-                .map(UserProfileDto::from)
+                .map(u -> privacy.profileFor(me, u))
                 .toList();
     }
 
     @GetMapping("/users/{username}")
-    public UserProfileDto getUser(@PathVariable String username) {
-        return userRepository.findByUsername(username)
-                .map(UserProfileDto::from)
+    public UserProfileDto getUser(@PathVariable String username, Authentication auth) {
+        String me = auth.getName();
+        return privacy.visibleByUsername(me, username)
+                .map(u -> privacy.profileFor(me, u))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
     }
 
     @GetMapping("/users/by-share/{shareId}")
-    public UserProfileDto getUserByShareId(@PathVariable String shareId) {
-        return userRepository.findByShareId(shareId)
-                .map(UserProfileDto::from)
+    public UserProfileDto getUserByShareId(@PathVariable String shareId, Authentication auth) {
+        String me = auth.getName();
+        return privacy.byShareId(shareId)
+                .filter(u -> !privacy.isBlockedEitherWay(me, u.getUsername()))
+                .map(u -> privacy.profileFor(me, u))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
     }
 
@@ -69,8 +76,7 @@ public class UserController {
     public List<UserProfileDto> searchUsers(@RequestParam String q, Authentication auth) {
         if (q == null || q.isBlank()) return List.of();
         String me = auth.getName();
-        return userRepository.searchUsers(q.trim()).stream()
-                .filter(u -> !u.getUsername().equals(me))
+        return privacy.search(me, q.trim()).stream()
                 .map(UserProfileDto::from)
                 .toList();
     }

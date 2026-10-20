@@ -34,6 +34,9 @@ import { UnlockKeyView } from "./components/UnlockKeyView";
 import { BackupSettings } from "./components/BackupSettings";
 import { DevicesSettings } from "./components/DevicesSettings";
 import { RestoreBackupPrompt } from "./components/RestoreBackupPrompt";
+import { PrivacySettings } from "./components/PrivacySettings";
+import { AddContactSheet } from "./components/AddContactSheet";
+import { isLegacyShareId } from "./lib/invite";
 
 // Shown in place of a message we can't open with the current key. Kept as a
 // constant so the cache layer can recognise (and refuse to persist) failures.
@@ -111,6 +114,12 @@ function App() {
 
   // ── friend requests ─────────────────────────────────────────────
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
+  // null = closed; otherwise the add-by-invite sheet, pre-filled with this code ("" = empty).
+  // Seeded from an opened invite link (?add=CODE) so it survives the login screen.
+  const [addInvite, setAddInvite] = useState<string | null>(() => {
+    const add = new URLSearchParams(window.location.search).get("add");
+    return add && !isLegacyShareId(add) ? add : null;
+  });
   // Open conversation's live status (all metadata the server already relays).
   // Keyed by peer, like contactKeys, so switching chats needs no reset.
   const [peerLive, setPeerLive] = useState<{ peer: string; online: boolean; typing: boolean; readAt: number }>(
@@ -357,9 +366,12 @@ function App() {
         if (profile) setMeProfile(profile);
       }).catch(console.error);
 
-    // check URL for ?add=<shareId> parameter
+    // ?add=<inviteCode> opens the add-contact sheet; ?add=<uuid> is a legacy share
+    // link, which still opens a chat with a (public) profile.
     const params = new URLSearchParams(window.location.search);
-    const shareIdToAdd = params.get("add");
+    const addParam = params.get("add");
+    const shareIdToAdd = addParam && isLegacyShareId(addParam) ? addParam : null;
+    if (addParam && !shareIdToAdd) navigate("/", { replace: true });   // sheet already seeded
     if (shareIdToAdd) {
       fetch(`${apiBase}/api/users/by-share/${shareIdToAdd}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -1118,6 +1130,14 @@ function App() {
     if (res.ok) setFriendRequests(prev => prev.filter(r => r.id !== id));
   }
 
+  async function handleBlockRequest(id: number, username: string) {
+    if (!token) return;
+    const res = await fetch(`${apiBase}/api/blocks/${encodeURIComponent(username)}`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) setFriendRequests(prev => prev.filter(r => r.id !== id && r.fromUser !== username));
+  }
+
   async function handleSendRequest(shareId: string) {
     if (!token) return;
     await fetch(`${apiBase}/api/friends/request`, {
@@ -1234,7 +1254,6 @@ function App() {
         <SettingsView
           me={me}
           meProfile={meProfile}
-          shareId={meProfile?.shareId}
           pushEnabled={pushEnabled}
           pushError={pushError}
           isBrave={isBrave}
@@ -1245,6 +1264,7 @@ function App() {
         >
           {me && (
             <>
+              {token && <PrivacySettings token={token} avatarUrl={meProfile?.avatarUrl} />}
               <BackupSettings me={me} token={token} onRestored={() => setHistoryVersion((v) => v + 1)} />
               <DevicesSettings me={me} token={token} currentDeviceId={signalDeviceId} />
             </>
@@ -1301,6 +1321,18 @@ function App() {
           onAcceptRequest={handleAcceptRequest}
           onRejectRequest={handleRejectRequest}
           onSendRequest={handleSendRequest}
+          onAddByInvite={() => setAddInvite("")}
+          onBlockRequest={handleBlockRequest}
+        />
+      )}
+
+      {addInvite !== null && token && (
+        <AddContactSheet
+          token={token}
+          initialCode={addInvite || undefined}
+          connected={users.map(u => u.username)}
+          onClose={() => setAddInvite(null)}
+          onOpenChat={username => { setAddInvite(null); selectRecipient(username); }}
         />
       )}
     </AppShell>

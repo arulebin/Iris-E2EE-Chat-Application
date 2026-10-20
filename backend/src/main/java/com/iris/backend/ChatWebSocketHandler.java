@@ -58,7 +58,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     // Only accepted friends may message, call, or see each other's typing/read state.
     private boolean areFriends(String a, String b) {
         if (a == null || b == null || a.equals(b)) return false;
-        return friendRequestRepository.existsAcceptedBetween(a, b);
+        return friendRequestRepository.existsAcceptedUnblockedBetween(a, b);   // blocks cut everything
     }
 
     private static Integer deviceIdOf(WebSocketSession s) {

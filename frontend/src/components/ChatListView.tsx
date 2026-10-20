@@ -49,6 +49,9 @@ type Props = {
   onAcceptRequest: (id: number) => void;
   onRejectRequest: (id: number) => void;
   onSendRequest: (shareId: string) => Promise<void>;
+  /** Opens the invite-code / QR sheet (the only way to add private profiles). */
+  onAddByInvite?: () => void;
+  onBlockRequest?: (id: number, username: string) => void;
 };
 
 type Tab = "messages" | "groups";
@@ -63,6 +66,8 @@ export function ChatListView({
   onAcceptRequest,
   onRejectRequest,
   onSendRequest,
+  onAddByInvite,
+  onBlockRequest,
 }: Props) {
   const activeTab: Tab = "messages";
   const [showSearch, setShowSearch] = useState(false);
@@ -296,6 +301,23 @@ export function ChatListView({
             />
           </header>
           <div className="flex-1 overflow-y-auto px-2 py-2">
+            {onAddByInvite && (
+              <button
+                onClick={() => { setShowSearch(false); onAddByInvite(); }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl hover:bg-card/60 text-left"
+              >
+                <span className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                    <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
+                    <rect x="3" y="14" width="7" height="7" rx="1" /><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3" />
+                  </svg>
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block font-bold text-navy text-sm">Add with invite code or QR</span>
+                  <span className="block text-xs text-muted">For people with private profiles</span>
+                </span>
+              </button>
+            )}
             {searching && (
               <p className="text-center text-muted text-sm py-8">Searching…</p>
             )}
@@ -363,6 +385,15 @@ export function ChatListView({
                       <p className="text-xs text-muted">Wants to connect</p>
                     </div>
                     <div className="flex gap-2">
+                      {onBlockRequest && (
+                        <button
+                          onClick={() => onBlockRequest(req.id, req.fromUser)}
+                          className="text-xs font-bold text-danger px-2 py-1.5 rounded-full"
+                          aria-label={`Block ${req.fromUser}`}
+                        >
+                          Block
+                        </button>
+                      )}
                       <button
                         onClick={() => onRejectRequest(req.id)}
                         className="text-xs font-bold text-muted bg-muted-soft/30 px-3 py-1.5 rounded-full"

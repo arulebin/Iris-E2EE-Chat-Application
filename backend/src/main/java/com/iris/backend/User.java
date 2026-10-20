@@ -72,6 +72,20 @@ public class User {
     @Column(columnDefinition = "TEXT")
     private String avatarUrl;
 
+    // ── Privacy ──
+    // Private: hidden from username search, and non-friends see only the bare
+    // username. Nullable so ddl-auto=update can add it to existing rows; null = public.
+    @Column
+    private Boolean privateProfile;
+
+    // Short, rotatable code for invite links/QR (see InviteCodes). Lazily issued.
+    @Column(unique = true, length = 16)
+    private String inviteCode;
+
+    // null reads as true: invites on unless the user turns them off.
+    @Column
+    private Boolean invitesEnabled;
+
     // JPA requires a no-arg constructor (reflection)
     protected User() { }
 
@@ -115,4 +129,10 @@ public class User {
     public void setPreferredName(String preferredName) { this.preferredName = preferredName; }
     public String getAvatarUrl() { return avatarUrl; }
     public void setAvatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; }
+    public boolean isPrivateProfile() { return Boolean.TRUE.equals(privateProfile); }
+    public void setPrivateProfile(boolean privateProfile) { this.privateProfile = privateProfile; }
+    public String getInviteCode() { return inviteCode; }
+    public void setInviteCode(String inviteCode) { this.inviteCode = inviteCode; }
+    public boolean isInvitesEnabled() { return invitesEnabled == null || invitesEnabled; }
+    public void setInvitesEnabled(boolean invitesEnabled) { this.invitesEnabled = invitesEnabled; }
 }
