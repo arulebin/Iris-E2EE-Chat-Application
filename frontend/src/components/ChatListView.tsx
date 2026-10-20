@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { get } from "idb-keyval";
-import { getMessages as getV2Messages } from "../lib/messageStore";
+import { getLegacyCache, getMessages as getV2Messages } from "../lib/messageStore";
 import { Avatar } from "./Avatar";
 import type { UserProfile, FriendRequest, ChatMessage } from "../types";
 import {
@@ -87,10 +86,10 @@ export function ChatListView({
           try {
             // Legacy display cache + local v2 (forward-secret) history; newest wins.
             const [legacy, v2] = await Promise.all([
-              get<ChatMessage[]>(`chat_history_${me}_${u.username}`),
+              getLegacyCache(me, u.username),
               getV2Messages(me, u.username),
             ]);
-            const hist = [...(legacy ?? []), ...v2];
+            const hist = [...legacy, ...v2];
             if (hist.length === 0) return;
             const last = hist.reduce((a, b) => (b.sentAt > a.sentAt ? b : a));
             map[u.username] = { text: previewText(last), time: last.sentAt, fromMe: last.from === me };

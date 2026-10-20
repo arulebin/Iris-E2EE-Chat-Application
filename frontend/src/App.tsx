@@ -10,7 +10,7 @@ import { isSendBlocked, noteIdentitySeen, resolveContactKeys } from "./lib/finge
 import { initSignal } from "./lib/signal/device";
 import { SignalClient, type SendExtras, type V2Meta } from "./lib/signal/client";
 import { NotV2Error } from "./lib/signal/messaging";
-import { getMessages, isEmpty as v2HistoryEmpty, mergeHistory, patchMessage } from "./lib/messageStore";
+import { getLegacyCache, getMessages, isEmpty as v2HistoryEmpty, mergeHistory, migrateHistory, patchMessage, setLegacyCache } from "./lib/messageStore";
 import { fetchBackupMeta, isRestoreDismissed, maybeAutoBackup } from "./lib/backup";
 import { disableNotifications, enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
@@ -309,6 +309,13 @@ function App() {
     return () => { cancelled = true; };
   }, [token, me, privateKey, keyMaterial]);
 
+  // Encrypt any plaintext history left by older builds, including conversations
+  // that are never opened again (opened ones are migrated on first read anyway).
+  useEffect(() => {
+    if (!me) return;
+    migrateHistory(me).catch((err) => console.error("History encryption migration failed", err));
+  }, [me]);
+
   useEffect(() => {
     if (!token) return;
 
@@ -408,12 +415,11 @@ function App() {
   useEffect(() => {
     if (!token || !recipient.trim() || !privateKey || !me) return;
 
-    const cacheKey = `chat_history_${me}_${recipient}`;
     let cancelled = false;
     // Offline-first: the display cache (legacy) merged with local v2 history,
     // which is authoritative for forward-secret messages.
-    Promise.all([get<ChatMessage[]>(cacheKey), getMessages(me, recipient)]).then(([cached, localV2]) => {
-      const local = mergeHistory((cached ?? []).filter((m) => m.v !== 2), localV2);
+    Promise.all([getLegacyCache(me, recipient), getMessages(me, recipient)]).then(([cached, localV2]) => {
+      const local = mergeHistory(cached.filter((m) => m.v !== 2), localV2);
       if (!cancelled && local.length > 0) {
         setMessages((prev) => prev.length === 0 ? local : prev);
       }
@@ -432,7 +438,7 @@ function App() {
         // persist and reappear even after the key is fixed. Only cache clean decrypts.
         const legacy = decrypted.filter((m) => m.v !== 2);
         if (!legacy.some((m) => m.content === UNDECRYPTABLE)) {
-          set(cacheKey, legacy).catch(console.error);
+          setLegacyCache(me, recipient, legacy).catch(console.error);
         }
       })
       .catch(() => { /* serve via offline cache silently */ });
@@ -514,7 +520,7 @@ function App() {
               const next = [...prev, decrypted];
               // Skip caching if this message failed to decrypt (see history effect).
               if (currentMe && currentRecipient && decrypted.content !== UNDECRYPTABLE) {
-                set(`chat_history_${currentMe}_${currentRecipient}`, next).catch(console.error);
+                setLegacyCache(currentMe, currentRecipient, next).catch(console.error);
               }
               return next;
             });
@@ -660,7 +666,7 @@ function App() {
           : m,
       );
       if (me && recipient) {
-        set(`chat_history_${me}_${recipient}`, next).catch(console.error);
+        setLegacyCache(me, recipient, next).catch(console.error);
       }
       return next;
     });

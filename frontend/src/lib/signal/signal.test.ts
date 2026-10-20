@@ -6,7 +6,7 @@ import { b64, generatePreKeys, generateSignedPreKey } from './device'
 import { decryptFromDevice, encryptForDevice, IdentityMismatchError, pad, startSession, unpad } from './messaging'
 import type { BundleDto } from './api'
 import { formatRecoveryKey, openBackup, parseRecoveryKey, sealBackup } from '../backup'
-import { mergeHistory } from '../messageStore'
+import { HistoryStore, mergeHistory } from '../messageStore'
 import { KeystoreKeyMissingError, type KeyWrapper } from '../nativeKeystore'
 import type { ChatMessage } from '../../types'
 
@@ -284,5 +284,100 @@ describe('mergeHistory', () => {
     const merged = mergeHistory(server, local)
     expect(merged.map(m => m.content)).toEqual(['legacy', 'secret', 'pending'])
     expect(merged[1].viewedAt).toBe('2026-01-02T00:00:00Z')
+  })
+})
+
+describe('encrypted local history', () => {
+  const msg = (id: number, content: string, extra: Partial<ChatMessage> = {}): ChatMessage =>
+    ({ id, from: 'alice', to: 'bob', content, sentAt: `2026-10-20T10:00:0${id}Z`, v: 2, ...extra })
+  const text = (raw: unknown) => new TextDecoder().decode(raw as Uint8Array)
+
+  it('round-trips and never stores content or media keys in the clear', async () => {
+    const kv = memoryKV()
+    const h = new HistoryStore('eh1', kv, null)
+    await h.upsertMany('bob', [msg(1, 'top secret', { mediaKey: 'MEDIAKEY123' })])
+    await h.upsertMessage('bob', msg(2, 'second'))
+    const raw = await kv.get<Uint8Array>('iris-msgs-v2:eh1:bob')
+    expect(raw).toBeInstanceOf(Uint8Array)
+    expect(text(raw)).not.toContain('top secret')
+    expect(text(raw)).not.toContain('MEDIAKEY123')
+    const back = await h.getMessages('bob')
+    expect(back.map(m => m.content)).toEqual(['top secret', 'second'])
+    expect(back[0].mediaKey).toBe('MEDIAKEY123')
+    await h.patchMessage('bob', m => m.id === 1, { viewedAt: 'now' })
+    expect((await h.getMessages('bob'))[0].viewedAt).toBe('now')
+  })
+
+  it('migrates plaintext from older builds, idempotently', async () => {
+    const kv = memoryKV()
+    await kv.set('iris-msgs-v2:eh2:bob', [msg(1, 'old plaintext')])
+    await kv.set('chat_history_eh2_bob', [msg(5, 'legacy cache', { v: 1 })])
+    const h = new HistoryStore('eh2', kv, null)
+    expect(await h.migrateAll()).toBe(2)
+    expect(await kv.get('iris-msgs-v2:eh2:bob')).toBeInstanceOf(Uint8Array)
+    expect(await kv.get('chat_history_eh2_bob')).toBeInstanceOf(Uint8Array)
+    expect(await h.migrateAll()).toBe(0)
+    expect((await h.getMessages('bob'))[0].content).toBe('old plaintext')
+    expect((await h.getLegacyCache('bob'))[0].content).toBe('legacy cache')
+  })
+
+  it('handles a mix of encrypted and plaintext conversations (interrupted migration)', async () => {
+    const kv = memoryKV()
+    const h = new HistoryStore('eh3', kv, null)
+    await h.upsertMessage('bob', msg(1, 'encrypted already'))
+    await kv.set('iris-msgs-v2:eh3:carol', [msg(2, 'still plaintext')])
+    // An append to a plaintext conversation encrypts it in the same write.
+    await kv.set('iris-msgs-v2:eh3:dave', [msg(3, 'plain')])
+    await h.upsertMessage('dave', msg(4, 'new'))
+    expect(await kv.get('iris-msgs-v2:eh3:dave')).toBeInstanceOf(Uint8Array)
+    const all = await h.exportAll()
+    expect(Object.keys(all).sort()).toEqual(['bob', 'carol', 'dave'])
+    expect(all.dave.map(m => m.content)).toEqual(['plain', 'new'])
+    expect(await kv.get('iris-msgs-v2:eh3:carol')).toBeInstanceOf(Uint8Array)
+  })
+
+  it('treats an unreadable blob as empty and recovers on the next write', async () => {
+    const kv = memoryKV()
+    const h = new HistoryStore('eh4', kv, null)
+    await h.upsertMessage('bob', msg(1, 'x'))
+    const raw = (await kv.get<Uint8Array>('iris-msgs-v2:eh4:bob'))!
+    raw[raw.length - 1] ^= 0xff   // corrupt the auth tag
+    await kv.set('iris-msgs-v2:eh4:bob', raw)
+    expect(await h.getMessages('bob')).toEqual([])
+    await h.upsertMessage('bob', msg(2, 'y'))
+    expect((await h.getMessages('bob')).map(m => m.content)).toEqual(['y'])
+  })
+
+  it("doesn't touch another local account whose name shares the prefix", async () => {
+    const kv = memoryKV()
+    const other = new HistoryStore('bob:x', kv, null)
+    await other.upsertMessage('alice', msg(1, 'theirs'))
+    await kv.set('iris-msgs-v2:bob:x:carol', [msg(2, 'their plaintext')])
+    const bob = new HistoryStore('bob', kv, null)
+    await bob.upsertMessage('alice', msg(3, 'mine'))
+    expect(Object.keys(await bob.exportAll())).toEqual(['alice'])
+    await bob.migrateAll()
+    expect(Array.isArray(await kv.get('iris-msgs-v2:bob:x:carol'))).toBe(true)   // left for its owner
+    expect((await other.getMessages('carol'))[0].content).toBe('their plaintext')
+    expect((await other.getMessages('alice'))[0].content).toBe('theirs')
+  })
+
+  it('serialises concurrent writes to one conversation', async () => {
+    const h = new HistoryStore('eh6', memoryKV(), null)
+    await Promise.all([1, 2, 3, 4, 5].map(i => h.upsertMessage('bob', msg(i, `m${i}`))))
+    expect((await h.getMessages('bob')).length).toBe(5)
+  })
+
+  it('uses its own Keystore-wrapped key, untouched by wiping Signal state', async () => {
+    const kv = memoryKV()
+    const ks = fakeKeystore()
+    const h = new HistoryStore('eh7', kv, ks)
+    await h.upsertMessage('bob', msg(1, 'kept'))
+    expect(typeof (await kv.get('hist:eh7:skw'))).toBe('string')
+    expect(await kv.get('hist:eh7:sk')).toBeUndefined()
+    const store = new SignalStore('eh7', kv, fakeKeystore())
+    await store.setDevice({ deviceId: 1, registrationId: 1, nextPreKeyId: 1, signedPreKeys: [] })
+    await store.wipe()
+    expect((await h.getMessages('bob'))[0].content).toBe('kept')
   })
 })
