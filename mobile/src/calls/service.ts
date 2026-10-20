@@ -60,6 +60,10 @@ export function configureCalls(cfg: CallsConfig): CallEngine {
   return engine
 }
 
+export function isCallsConfigured(): boolean {
+  return engine !== null
+}
+
 export function getCallEngine(): CallEngine {
   if (!engine) throw new Error('configureCalls() must run before using calls')
   return engine

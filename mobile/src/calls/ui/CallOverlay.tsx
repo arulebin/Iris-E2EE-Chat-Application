@@ -6,7 +6,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { IrisCalls } from '../../../modules/iris-calls'
 import { subscribePip } from '../bindings'
 import type { CallSnapshot } from '../engine'
-import { acceptCall, declineCall, hangUp, startCall, useCall } from '../service'
+import { acceptCall, declineCall, hangUp, isCallsConfigured, startCall, useCall } from '../service'
 import { formatDuration } from '../signals'
 import type { CallSummary } from '../types'
 import { CallScreen } from './CallScreen'
@@ -38,7 +38,13 @@ function useIsPip(): boolean {
  * Renders nothing when there is no call, and never blocks touches outside its own
  * widgets (pointerEvents="box-none").
  */
-export function CallOverlay({ profileOf, onQuickReply }: CallOverlayProps) {
+/** Renders nothing until configureCalls() has run, so mounting order can never crash the app. */
+export function CallOverlay(props: CallOverlayProps) {
+  if (!isCallsConfigured()) return null
+  return <ConfiguredOverlay {...props} />
+}
+
+function ConfiguredOverlay({ profileOf, onQuickReply }: CallOverlayProps) {
   const call = useCall()
   const { engine, state } = call
   const pip = useIsPip()
