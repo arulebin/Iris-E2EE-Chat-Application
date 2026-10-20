@@ -19,7 +19,8 @@ type Props = {
   messages: ChatMessage[];
   input: string;
   onInputChange: (v: string) => void;
-  onSend: () => void;
+  /** Rejects with a user-facing Error when the message couldn't be sent. */
+  onSend: () => Promise<void>;
   onSendMedia?: (file: File, viewOnce: boolean) => Promise<void>;
   onMarkSnapViewed: (key: string) => void;
   recipientPublicKeyReady: boolean;

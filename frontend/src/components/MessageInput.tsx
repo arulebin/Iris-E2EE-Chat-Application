@@ -6,7 +6,8 @@ import { CameraIcon, ImageIcon, SendIcon, SmileIcon, TimerIcon, XIcon } from "./
 type Props = {
   value: string;
   onChange: (v: string) => void;
-  onSend: () => void;
+  /** Rejects with a user-facing Error when the message couldn't be sent. */
+  onSend: () => Promise<void>;
   onSendMedia?: (file: File, viewOnce: boolean) => Promise<void>;
   disabled?: boolean;
   disabledHint?: string | null;
@@ -31,6 +32,17 @@ export function MessageInput({
   const [cameraOpen, setCameraOpen] = useState(false);
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+
+  // Text send: surface failures under the composer instead of failing silently.
+  async function submit() {
+    if (disabled) return;
+    setUploadError(null);
+    try {
+      await onSend();
+    } catch (err: unknown) {
+      setUploadError(err instanceof Error ? err.message : "Message couldn't be sent.");
+    }
+  }
 
   async function uploadFile(file: File) {
     if (!onSendMedia) return;
@@ -82,10 +94,10 @@ export function MessageInput({
       )}
 
       {pendingFiles.length > 0 && (
-        <div className="fixed inset-0 bg-black z-50 flex flex-col pt-4">
+        <div className="fixed inset-0 bg-black z-50 flex flex-col pt-4 safe-frame">
           <button
             onClick={() => setPendingFiles([])}
-            className="absolute top-4 right-4 text-white/80 hover:text-white p-2 z-10"
+            className="absolute safe-top-4 right-4 text-white/80 hover:text-white p-2 z-10"
             aria-label="Cancel"
           >
             <XIcon className="w-7 h-7" />
@@ -150,7 +162,7 @@ export function MessageInput({
           <input
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !disabled && onSend()}
+            onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
             placeholder={uploading ? "Uploading…" : "Type here..."}
             disabled={disabled || uploading}
             className="flex-1 bg-transparent text-navy placeholder:text-muted text-[15px] focus:outline-none disabled:opacity-50"
@@ -196,7 +208,7 @@ export function MessageInput({
           {value.trim() ? (
             <button
               type="button"
-              onClick={() => !disabled && onSend()}
+              onClick={() => void submit()}
               disabled={disabled}
               className="iris-fill -mr-1 w-9 h-9 rounded-full flex items-center justify-center shadow-sm transition-transform active:scale-90 disabled:opacity-50"
               aria-label="Send message"

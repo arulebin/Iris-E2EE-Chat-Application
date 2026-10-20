@@ -21,7 +21,7 @@ export function IncomingCallModal({ from, mode, onAccept, onReject }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col items-center justify-between"
+      className="fixed inset-0 z-50 flex flex-col items-center justify-between safe-frame"
       style={{ background: "#0b0f14" }}
     >
       {/* Top section — caller info */}

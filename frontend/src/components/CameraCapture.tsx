@@ -212,10 +212,10 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
   // ─── Preview screen ─────────────────────────────────────────────
   if (preview) {
     return (
-      <div className="fixed inset-0 bg-black z-50 flex flex-col">
+      <div className="fixed inset-0 bg-black z-50 flex flex-col safe-frame">
         <button
           onClick={onCancel}
-          className="absolute top-4 right-4 text-white/80 hover:text-white p-2 z-10"
+          className="absolute safe-top-4 right-4 text-white/80 hover:text-white p-2 z-10"
           aria-label="Close camera"
         >
           <XIcon className="w-7 h-7" />
@@ -236,7 +236,7 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
           />
         )}
 
-        <div className="absolute bottom-8 inset-x-0 flex items-center justify-around px-8">
+        <div className="absolute safe-bottom-8 inset-x-0 flex items-center justify-around px-8">
           <button
             onClick={discardPreview}
             className="text-white text-base font-semibold px-5 py-2.5 rounded-full bg-white/15 hover:bg-white/25 active:scale-95"
@@ -257,10 +257,10 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
   // ─── Native capture screen (Android app) ────────────────────────
   if (native) {
     return (
-      <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center gap-4 px-8">
+      <div className="fixed inset-0 bg-black z-50 flex flex-col items-center justify-center gap-4 px-8 safe-frame">
         <button
           onClick={onCancel}
-          className="absolute top-4 right-4 text-white/80 hover:text-white p-2 z-10"
+          className="absolute safe-top-4 right-4 text-white/80 hover:text-white p-2 z-10"
           aria-label="Close camera"
         >
           <XIcon className="w-7 h-7" />
@@ -291,17 +291,17 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
 
   // ─── Live capture screen ────────────────────────────────────────
   return (
-    <div className="fixed inset-0 bg-black z-50 flex flex-col">
+    <div className="fixed inset-0 bg-black z-50 flex flex-col safe-frame">
       <button
         onClick={onCancel}
-        className="absolute top-4 right-4 text-white/80 hover:text-white p-2 z-10"
+        className="absolute safe-top-4 right-4 text-white/80 hover:text-white p-2 z-10"
         aria-label="Close camera"
       >
         <XIcon className="w-7 h-7" />
       </button>
 
       {recording && (
-        <div className="absolute top-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold">
+        <div className="absolute safe-top-5 left-1/2 -translate-x-1/2 z-10 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold">
           <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
           REC{" "}
           {Math.floor(recElapsed / 60).toString().padStart(2, "0")}:
@@ -325,7 +325,7 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
       )}
 
       {!recording && !error && (
-        <div className="absolute bottom-28 inset-x-0 flex items-center justify-center gap-2">
+        <div className="absolute safe-bottom-28 inset-x-0 flex items-center justify-center gap-2">
           <button
             onClick={() => setMode("photo")}
             className={`text-xs font-semibold px-3 py-1.5 rounded-full transition ${
@@ -346,7 +346,7 @@ export function CameraCapture({ onCapture, onCancel }: Props) {
         </div>
       )}
 
-      <div className="absolute bottom-8 inset-x-0 flex items-center justify-between px-12">
+      <div className="absolute safe-bottom-8 inset-x-0 flex items-center justify-between px-12">
         <button
           onClick={onCancel}
           className="text-white/80 hover:text-white text-sm font-semibold disabled:opacity-30"

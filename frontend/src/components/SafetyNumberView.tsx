@@ -48,14 +48,14 @@ export function SafetyNumberView({ me, peer, peerName, token, trust, onClose }: 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 safe-pt"
       onClick={onClose}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="safety-number-title"
-        className="bg-card w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-6 flex flex-col items-center gap-4 max-h-full overflow-y-auto"
+        className="bg-card w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-6 safe-pb-6 flex flex-col items-center gap-4 max-h-full overflow-y-auto"
         onClick={e => e.stopPropagation()}
       >
         <div className="w-full flex items-center justify-between">

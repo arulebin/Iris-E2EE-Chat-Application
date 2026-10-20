@@ -29,7 +29,7 @@ export function AuthView({
   const isLogin = mode === "login";
 
   return (
-    <div className="relative min-h-dvh overflow-hidden bg-bg flex flex-col items-center justify-center px-6">
+    <div className="relative min-h-full overflow-hidden bg-bg flex flex-col items-center justify-center px-6">
       {/* Ambient aperture — the same iris motif as the splash, dropped behind
           the form so logging in feels like stepping through it. */}
       <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">

@@ -635,7 +635,11 @@ function App() {
       };
 
       ws.onclose = () => {
-        wsRef.current = null;
+        // Only clear the ref if it still points at THIS socket. When the effect
+        // re-runs (e.g. the Signal device id arrives) the old socket's close event
+        // can land after the new socket was assigned; nulling unconditionally
+        // orphaned the live socket and every send then silently bailed out.
+        if (wsRef.current === ws) wsRef.current = null;
         if (!destroyed) {
           retryTimer = setTimeout(() => {
             retryDelay = Math.min(retryDelay * 2, 30_000);
@@ -697,11 +701,17 @@ function App() {
   }
 
   // ── send chat message ───────────────────────────────────────────
+  // Throws a user-facing Error on failure (shown under the composer); the draft
+  // is kept so nothing the user typed is lost.
   async function send() {
     if (input.trim() === "" || recipient.trim() === "") return;
-    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      throw new Error("Not connected — reconnecting, try again in a moment.");
+    }
     // Never encrypt to a key the user hasn't accepted after a key change.
-    if (!me || await isSendBlocked(me, recipient)) return;
+    if (!me || await isSendBlocked(me, recipient)) {
+      throw new Error("This contact's security key changed — accept it before sending.");
+    }
 
     const text = input;
     const extras: SendExtras = { replyToId: replyTo?.id ?? null };
@@ -710,13 +720,14 @@ function App() {
     sendTyping("stop");
     try {
       if (!(await sendV2(text, extras))) {
-        if (!myPublicKey || !recipientPublicKey) return;
+        if (!myPublicKey || !recipientPublicKey) throw new Error("Encryption keys aren't ready yet — try again in a moment.");
         sendLegacy(await encryptMessage(text, myPublicKey, recipientPublicKey), extras);
       }
       setInput("");
       setReplyTo(null);
     } catch (err) {
       console.error("Send failed", err);
+      throw err instanceof Error ? err : new Error("Message couldn't be sent.");
     }
   }
 

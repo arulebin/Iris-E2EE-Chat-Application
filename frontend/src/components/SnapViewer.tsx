@@ -69,7 +69,7 @@ export function SnapViewer({ mediaId, mimeType, mediaKey, token, onClose, onCons
 
   return (
     <div
-      className="fixed inset-0 bg-black z-50 flex items-center justify-center"
+      className="fixed inset-0 bg-black z-50 flex items-center justify-center safe-frame"
       onClick={onClose}
     >
       <button
@@ -77,7 +77,7 @@ export function SnapViewer({ mediaId, mimeType, mediaKey, token, onClose, onCons
           e.stopPropagation();
           onClose();
         }}
-        className="absolute top-4 right-4 text-white/80 hover:text-white p-2 z-10"
+        className="absolute safe-top-4 right-4 text-white/80 hover:text-white p-2 z-10"
         aria-label="Close"
       >
         <XIcon className="w-7 h-7" />
