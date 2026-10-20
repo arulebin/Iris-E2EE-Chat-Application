@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { getLegacyCache, getMessages as getV2Messages } from "../lib/messageStore";
 import { Avatar } from "./Avatar";
+import { apiBase } from "../lib/config";
 import type { UserProfile, FriendRequest, ChatMessage } from "../types";
 import {
   ChatBubbleIcon,
@@ -128,7 +129,7 @@ export function ChatListView({
       setSearching(true);
       try {
         const token = localStorage.getItem("token");
-        const res = await fetch(`/api/users/search?q=${encodeURIComponent(q)}`, {
+        const res = await fetch(`${apiBase}/api/users/search?q=${encodeURIComponent(q)}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) setSearchResults(await res.json());
