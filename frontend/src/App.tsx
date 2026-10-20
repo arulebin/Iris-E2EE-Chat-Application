@@ -3,10 +3,10 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { get, set } from "idb-keyval";
 import {
   ensureKeyPair,
-  fetchPublicKey,
   encryptMessage,
   decryptMessage,
 } from "./crypto";
+import { fetchPinnedPublicKey, isSendBlocked } from "./lib/fingerprint";
 import { enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
 import { playRingback, playRingtone, stopTone } from "./lib/sound";
@@ -269,9 +269,11 @@ function App() {
             setMessages([]);
             setReplyTo(null);
             navigate(`/chat/${encodeURIComponent(profile.username)}`, { replace: true });
-            fetchPublicKey(profile.username, token!)
-              .then(key => setRecipientPublicKey(key))
-              .catch(console.error);
+            if (me) {
+              fetchPinnedPublicKey(me, profile.username, token!)
+                .then(({ key }) => setRecipientPublicKey(key))
+                .catch(console.error);
+            }
           } else {
             navigate("/", { replace: true });
           }
@@ -417,9 +419,9 @@ function App() {
     setMessages([]);
     setReplyTo(null);
     navigate(`/chat/${encodeURIComponent(user)}`);
-    if (!token) return;
+    if (!token || !me) return;
     try {
-      const key = await fetchPublicKey(user, token);
+      const { key } = await fetchPinnedPublicKey(me, user, token);
       setRecipientPublicKey(key);
     } catch (err) {
       console.error(`No key for ${user}:`, err);
@@ -431,6 +433,8 @@ function App() {
     if (input.trim() === "" || recipient.trim() === "") return;
     if (!myPublicKey || !recipientPublicKey) return;
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    // Never encrypt to a key the user hasn't accepted after a key change.
+    if (!me || await isSendBlocked(me, recipient)) return;
 
     try {
       const enc = await encryptMessage(input, myPublicKey, recipientPublicKey);
@@ -458,6 +462,9 @@ function App() {
   async function sendMedia(file: File, viewOnce: boolean) {
     if (!token || !recipient || wsRef.current?.readyState !== WebSocket.OPEN) {
       throw new Error("Not connected");
+    }
+    if (!me || await isSendBlocked(me, recipient)) {
+      throw new Error("Contact's security key changed — accept it before sending");
     }
     const { mediaId, mimeType } = await uploadMedia(file, token);
     wsRef.current.send(

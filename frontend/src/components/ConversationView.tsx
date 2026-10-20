@@ -1,7 +1,12 @@
+import { useState } from "react";
 import type { CallState, ChatMessage, UserProfile } from "../types";
 import { ConversationHeader } from "./ConversationHeader";
 import { MessageList } from "./MessageList";
 import { MessageInput } from "./MessageInput";
+import { KeyChangedBanner } from "./KeyChangedBanner";
+import { SafetyNumberView } from "./SafetyNumberView";
+import { acknowledgeKeyChange } from "../lib/fingerprint";
+import { useContactTrust } from "../lib/useContactTrust";
 
 type Props = {
   peer: string;
@@ -55,9 +60,16 @@ export function ConversationView(props: Props) {
     onBack,
   } = props;
 
+  const trust = useContactTrust(me, peer);
+  const [showSafetyNumber, setShowSafetyNumber] = useState(false);
+  const peerName = peerProfile?.preferredName || peer;
+  const keyChanged = trust?.changed === true;
+
   return (
     <div className="flex flex-col h-full bg-bg">
       <ConversationHeader
+        verified={trust?.verified === true && !keyChanged}
+        onVerify={me && token ? () => setShowSafetyNumber(true) : undefined}
         peer={peer}
         peerProfile={peerProfile}
         online={online}
@@ -67,6 +79,25 @@ export function ConversationView(props: Props) {
         onStartVideoCall={onStartVideoCall}
         onHangUp={onHangUp}
       />
+
+      {keyChanged && me && (
+        <KeyChangedBanner
+          peerName={peerName}
+          onAccept={() => { acknowledgeKeyChange(me, peer).catch(console.error); }}
+          onVerify={() => setShowSafetyNumber(true)}
+        />
+      )}
+
+      {showSafetyNumber && me && token && (
+        <SafetyNumberView
+          me={me}
+          peer={peer}
+          peerName={peerName}
+          token={token}
+          trust={trust}
+          onClose={() => setShowSafetyNumber(false)}
+        />
+      )}
 
       <MessageList
         messages={messages}
@@ -81,9 +112,11 @@ export function ConversationView(props: Props) {
         onChange={onInputChange}
         onSend={onSend}
         onSendMedia={onSendMedia}
-        disabled={!recipientPublicKeyReady}
+        disabled={!recipientPublicKeyReady || keyChanged}
         disabledHint={
-          recipientPublicKeyReady
+          keyChanged
+            ? `Accept ${peerName}'s new security key to keep chatting.`
+            : recipientPublicKeyReady
             ? null
             : `${peer} hasn't uploaded a public key yet — ask them to log in.`
         }
