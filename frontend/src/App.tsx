@@ -7,7 +7,7 @@ import {
   decryptMessage,
 } from "./crypto";
 import { fetchPinnedPublicKey, isSendBlocked } from "./lib/fingerprint";
-import { enableNotifications, hasExistingSubscription } from "./push";
+import { disableNotifications, enableNotifications, hasExistingSubscription } from "./push";
 import { createPeerConnection, type CallSignal } from "./webrtc";
 import { playRingback, playRingtone, stopTone } from "./lib/sound";
 import type { ChatMessage, CallState, CallMode, UserProfile, FriendRequest } from "./types";
@@ -158,6 +158,7 @@ function App() {
   }
 
   function handleLogout() {
+    if (token) void disableNotifications(token);
     localStorage.removeItem("token");
     setToken(null);
     setMessages([]);

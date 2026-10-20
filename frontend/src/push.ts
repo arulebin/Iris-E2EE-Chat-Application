@@ -1,4 +1,10 @@
+import { Capacitor } from '@capacitor/core'
 import { apiBase } from './lib/config'
+import {
+  disableNativeNotifications,
+  enableNativeNotifications,
+  hasNativeRegistration,
+} from './lib/nativePush'
 
 /**
  * Convert a URL-safe base64 string (VAPID format) to the Uint8Array
@@ -19,7 +25,10 @@ function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
  * Resolves successfully only if the user granted permission AND we got a subscription
  * AND the backend accepted it.
  */
-export async function enableNotifications(token: string): Promise<PushSubscription> {
+export async function enableNotifications(token: string): Promise<PushSubscription | void> {
+  // Android app: FCM instead of Web Push (WebViews don't support PushManager).
+  if (Capacitor.isNativePlatform()) return enableNativeNotifications(token)
+
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     throw new Error('Push notifications are not supported in this browser')
   }
@@ -66,8 +75,17 @@ export async function enableNotifications(token: string): Promise<PushSubscripti
  * Used to decide whether to show the "Enable notifications" button.
  */
 export async function hasExistingSubscription(): Promise<boolean> {
+  if (Capacitor.isNativePlatform()) return hasNativeRegistration()
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return false
   const reg = await navigator.serviceWorker.ready
   const sub = await reg.pushManager.getSubscription()
   return sub !== null
+}
+
+/**
+ * Stop this device receiving the account's notifications on logout.
+ * Native only for now — browser subscriptions are left as they were.
+ */
+export async function disableNotifications(token: string): Promise<void> {
+  if (Capacitor.isNativePlatform()) await disableNativeNotifications(token)
 }

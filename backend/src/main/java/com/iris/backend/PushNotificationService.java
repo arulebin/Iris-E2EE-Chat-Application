@@ -22,22 +22,34 @@ public class PushNotificationService {
     private final PushSubscriptionRepository subscriptions;
     private final ObjectMapper objectMapper;
     private final nl.martijndwars.webpush.PushService webPushService;
+    private final FcmSender fcmSender;
 
     public PushNotificationService(
             PushSubscriptionRepository subscriptions,
             ObjectMapper objectMapper,
+            FcmSender fcmSender,
             @Value("${vapid.public-key}")  String publicKey,
             @Value("${vapid.private-key}") String privateKey,
             @Value("${vapid.subject}")      String subject
     ) throws Exception {
         this.subscriptions = subscriptions;
         this.objectMapper  = objectMapper;
+        this.fcmSender     = fcmSender;
         Security.addProvider(new BouncyCastleProvider());   // web-push needs BC for ECC
         this.webPushService = new nl.martijndwars.webpush.PushService(publicKey, privateKey, subject);
     }
 
     /** Send a notification to *all* of this user's subscriptions. */
     public void sendToUser(String username, String title, String body) {
+        sendToUser(username, title, body, false);
+    }
+
+    /**
+     * Fan out to both browser (Web Push) subscriptions and Android (FCM) devices.
+     * `urgent` marks call alerts: high priority + the "calls" channel on Android.
+     */
+    public void sendToUser(String username, String title, String body, boolean urgent) {
+        fcmSender.sendToUser(username, title, body, urgent);
         List<PushSubscription> subs = subscriptions.findByUsername(username);
         for (PushSubscription sub : subs) {
             try {

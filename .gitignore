@@ -24,3 +24,4 @@ package.json
 PROGRESS.md
 SUMMARY.md
 .claude/
+!.env.*.example

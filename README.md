@@ -180,3 +180,7 @@ When logging in from a new device, a Key Encryption Key (KEK) is derived from yo
 
 ---
 *Created as an exploratory self-hosted learning project.*
+
+## Android push notifications
+
+See [docs/android-push.md](docs/android-push.md) for Firebase Cloud Messaging setup.

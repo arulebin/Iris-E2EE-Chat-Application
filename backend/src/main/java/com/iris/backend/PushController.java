@@ -1,6 +1,7 @@
 package com.iris.backend;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -9,12 +10,44 @@ import org.springframework.web.bind.annotation.*;
 public class PushController {
 
     private final PushSubscriptionRepository subscriptions;
+    private final FcmTokenRepository fcmTokens;
 
     @Value("${vapid.public-key}")
     private String vapidPublicKey;
 
-    public PushController(PushSubscriptionRepository subscriptions) {
+    public PushController(PushSubscriptionRepository subscriptions, FcmTokenRepository fcmTokens) {
         this.subscriptions = subscriptions;
+        this.fcmTokens = fcmTokens;
+    }
+
+    public record FcmTokenRequest(String token) {}
+
+    /**
+     * Android app registers its FCM token. Idempotent; if the device was last
+     * used by another account, the token moves to the caller so alerts for the
+     * previous user stop reaching this phone.
+     */
+    @PostMapping("/fcm-token")
+    public ResponseEntity<Void> registerFcmToken(@RequestBody FcmTokenRequest req, Authentication auth) {
+        if (req.token() == null || req.token().isBlank() || req.token().length() > 4096) {
+            return ResponseEntity.badRequest().build();
+        }
+        String username = auth.getName();
+        FcmToken row = fcmTokens.findByToken(req.token())
+                .orElseGet(() -> new FcmToken(username, req.token()));
+        row.setUsername(username);
+        fcmTokens.save(row);
+        return ResponseEntity.ok().build();
+    }
+
+    /** Called on logout. Only the token's owner may remove it. */
+    @DeleteMapping("/fcm-token")
+    public ResponseEntity<Void> unregisterFcmToken(@RequestBody FcmTokenRequest req, Authentication auth) {
+        if (req.token() == null) return ResponseEntity.badRequest().build();
+        fcmTokens.findByToken(req.token())
+                .filter(t -> t.getUsername().equals(auth.getName()))
+                .ifPresent(fcmTokens::delete);
+        return ResponseEntity.noContent().build();
     }
 
     /** Frontend calls this to learn which key to subscribe with. */
