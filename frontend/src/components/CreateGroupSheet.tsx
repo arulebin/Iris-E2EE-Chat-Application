@@ -4,6 +4,7 @@ import { groupApi, type GroupDto } from "../lib/groups/api";
 import { uploadGroupAvatar } from "../lib/groups/avatar";
 import { Avatar } from "./Avatar";
 import { BackIcon, CameraIcon, CheckIcon } from "./icons";
+import { beginFilePick, endFilePick } from "../lib/appLockGuard";
 
 type Props = {
   token: string;
@@ -143,7 +144,8 @@ export function CreateGroupSheet({ token, friends, onCreated, onClose }: Props) 
               type="file"
               accept="image/jpeg,image/png,image/webp,image/gif"
               className="hidden"
-              onChange={(e) => pickAvatar(e.target.files?.[0])}
+              onClick={beginFilePick}
+              onChange={(e) => { endFilePick(); pickAvatar(e.target.files?.[0]); }}
             />
           </label>
           <input

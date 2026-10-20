@@ -11,11 +11,8 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ScreenSecurityPlugin.class);
         registerPlugin(KeystorePlugin.class);
-<<<<<<< HEAD
         registerPlugin(AppLockPlugin.class);
-=======
         registerPlugin(CallNativePlugin.class);
->>>>>>> security-hardening
         super.onCreate(savedInstanceState);
         // Secure by default from the first frame (splash + recents thumbnail),
         // before the web layer has loaded. lib/screenSecurity.ts clears it if

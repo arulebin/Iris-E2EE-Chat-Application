@@ -3,6 +3,7 @@ import type { ChatMessage } from "../types";
 import { CameraCapture } from "./CameraCapture";
 import { MAX_MESSAGE_CHARS } from "../lib/limits";
 import { CameraIcon, ImageIcon, SendIcon, SmileIcon, TimerIcon, XIcon } from "./icons";
+import { beginFilePick, endFilePick } from "../lib/appLockGuard";
 
 type Props = {
   value: string;
@@ -183,7 +184,8 @@ export function MessageInput({
             multiple
             accept="image/*,video/*"
             className="hidden"
-            onChange={handleFileInput}
+            onClick={beginFilePick}
+            onChange={(e) => { endFilePick(); handleFileInput(e); }}
           />
           {allowSnaps && <button
             type="button"

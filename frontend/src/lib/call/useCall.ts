@@ -5,6 +5,7 @@ import type { CallMode, CallState } from '../../types'
 import { belongsToCall, currentCall, endNotice } from './signals'
 import { grade, sampleStats, type LinkSample, type Quality } from './quality'
 import { nativeCallSupported, onPipChange, setCallPip, setCallSpeaker, startCallAudio, stopCallAudio } from './native'
+import { setCallActive } from '../appLockGuard'
 
 // One-to-one voice/video calls over WebRTC, signalled through the chat socket.
 //
@@ -528,6 +529,13 @@ export function useCall({ token, wsRef, onAccepted }: Options) {
     navigator.wakeLock.request('screen').then((l) => { if (released) void l.release(); else lock = l }).catch(() => {})
     return () => { released = true; void lock?.release() }
   }, [videoCall])
+
+  // Tell the app lock a call is running: it must not lock (= unmount <App/>, ending the call) on background/PiP.
+  const lockGuardActive = state.kind === 'outgoing' || state.kind === 'active'
+  useEffect(() => {
+    setCallActive(lockGuardActive)
+    return () => setCallActive(false)
+  }, [lockGuardActive])
 
   // Closing the tab/app mid-call tells the peer instead of leaving them on "Reconnecting…".
   const inCall = state.kind !== 'idle'

@@ -8,6 +8,7 @@ import { groupInviteUrl } from "../lib/groups/invite";
 import { Avatar } from "./Avatar";
 import { SafetyNumberView } from "./SafetyNumberView";
 import { CameraIcon, CheckIcon, ShieldCheckIcon, XIcon } from "./icons";
+import { beginFilePick, endFilePick, withAppLockHold } from "../lib/appLockGuard";
 
 type Props = {
   group: GroupDto;
@@ -65,7 +66,7 @@ export function GroupInfoView({ group, me, token, friends, trust, unavailable, o
   async function shareInvite() {
     if (!inviteUrl) return;
     const nav = navigator as Navigator & { share?: (d: ShareData) => Promise<void> };
-    if (nav.share) await nav.share({ title: group.name, text: `Join "${group.name}" on Iris`, url: inviteUrl }).catch(() => {});
+    if (nav.share) await withAppLockHold(() => nav.share!({ title: group.name, text: `Join "${group.name}" on Iris`, url: inviteUrl })).catch(() => {});
     else void copyInvite();
   }
 
@@ -95,7 +96,9 @@ export function GroupInfoView({ group, me, token, friends, trust, unavailable, o
                   accept="image/jpeg,image/png,image/webp,image/gif"
                   className="hidden"
                   disabled={busy}
+                  onClick={beginFilePick}
                   onChange={(e) => {
+                    endFilePick();
                     const file = e.target.files?.[0];
                     if (file) void run(async () => groupApi.update(token, group.id, { avatarUrl: await uploadGroupAvatar(file, token) }));
                   }}

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { BackIcon, BellIcon, LogoutIcon } from "./icons";
 import { Avatar } from "./Avatar";
 import { AppLockSettings } from "./AppLockSettings";
+import { beginFilePick, endFilePick } from "../lib/appLockGuard";
 import { getThemePref, setThemePref, type ThemePref } from "../lib/theme";
 import {
   getScreenSecurityPref,
@@ -103,7 +104,7 @@ export function SettingsView({
             />
             <label className="absolute bottom-0 right-0 bg-primary w-6 h-6 rounded-full flex items-center justify-center text-white cursor-pointer hover:opacity-90 shadow">
               <span className="text-lg leading-none -mt-1">+</span>
-              <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+              <input type="file" accept="image/*" className="hidden" onClick={beginFilePick} onChange={(e) => { endFilePick(); handleFileChange(e); }} />
             </label>
           </div>
           <p className="font-bold text-navy text-lg">{me}</p>
@@ -175,38 +176,7 @@ export function SettingsView({
           </section>
         )}
 
-<<<<<<< HEAD
         {me && <AppLockSettings me={me} />}
-
-        <section>
-          <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
-            Share Profile
-          </p>
-          <div className="bg-card rounded-2xl flex flex-col items-center p-6 shadow-sm dark:border dark:border-muted-soft gap-4">
-            <div className="bg-white p-2 rounded-xl shadow-sm border border-muted-soft">
-              <QRCodeSVG 
-                value={inviteUrl} 
-                size={180} 
-                fgColor="#5b5bd6"
-                imageSettings={qrAvatarSrc ? {
-                  src: qrAvatarSrc,
-                  height: 48,
-                  width: 48,
-                  excavate: true
-                } : undefined}
-              />
-            </div>
-            <p className="text-sm text-center text-muted">Have friends scan this code or use your link to add you.</p>
-            <button 
-              onClick={handleCopyLink}
-              className="w-full bg-primary text-white font-bold py-2 rounded-xl hover:bg-primary/90"
-            >
-              Copy Invite Link
-            </button>
-          </div>
-        </section>
-=======
->>>>>>> security-hardening
 
         <section>
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">

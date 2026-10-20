@@ -4,7 +4,7 @@ import { App as CapApp } from "@capacitor/app";
 import { getUsername } from "../lib/auth";
 import { getConfig, LockMachine, onConfigChange, timingMs } from "../lib/appLockCore";
 import { engageLock, setExclusiveRunner } from "../lib/appLock";
-import { appLockHeld, authGuard } from "../lib/appLockGuard";
+import { lockSuspended, onCallActiveChange } from "../lib/appLockGuard";
 import { AppLockScreen } from "./AppLockScreen";
 import { IrisMark } from "./icons";
 
@@ -81,7 +81,7 @@ export function AppLock({ children }: { children: ReactNode }) {
     const onHide = () => {
       const now = Date.now();
       const cfg = getConfig(currentUser());
-      if (!cfg || authGuard.suspended(now) || appLockHeld(now)) return;
+      if (!cfg || lockSuspended(now)) return;
       machine.setTimeout(timingMs(cfg.timing));
       machine.background(now);
       setCovered(true);
@@ -89,7 +89,7 @@ export function AppLock({ children }: { children: ReactNode }) {
     const onShow = () => {
       const now = Date.now();
       const cfg = getConfig(currentUser());
-      if (!cfg || authGuard.suspended(now) || appLockHeld(now)) {
+      if (!cfg || lockSuspended(now)) {
         machine.discardBackground();
         setCovered(false);
         return;
@@ -99,16 +99,22 @@ export function AppLock({ children }: { children: ReactNode }) {
       else setCovered(false);
     };
 
+    // The call kept the lock off while the app was in the background; if it ends
+    // there (hung up from PiP / the peer left), start the away-timer now.
+    const offCall = onCallActiveChange((on) => {
+      if (!on && document.visibilityState === "hidden") onHide();
+    });
+
     if (Capacitor.isNativePlatform()) {
       const subs = [
         CapApp.addListener("pause", onHide),
         CapApp.addListener("resume", onShow),
       ];
-      return () => { subs.forEach((s) => void s.then((h) => h.remove())); };
+      return () => { offCall(); subs.forEach((s) => void s.then((h) => h.remove())); };
     }
     const onVis = () => (document.visibilityState === "hidden" ? onHide() : onShow());
     document.addEventListener("visibilitychange", onVis);
-    return () => document.removeEventListener("visibilitychange", onVis);
+    return () => { offCall(); document.removeEventListener("visibilitychange", onVis); };
   }, [machine, engage]);
 
   const user = currentUser();

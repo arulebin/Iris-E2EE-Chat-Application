@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 import { Camera } from '@capacitor/camera'
+import { withAppLockHold } from './appLockGuard'
 
 // In the Android app, hand capture to the system camera instead of grabbing a
 // frame from a getUserMedia stream. The system app runs the full still-photo
@@ -40,12 +41,12 @@ function normaliseError(err: unknown): never {
 
 export async function nativeTakePhoto(): Promise<File> {
   try {
-    const res = await Camera.takePhoto({
+    const res = await withAppLockHold(() => Camera.takePhoto({
       quality: 92,
       correctOrientation: true,
       saveToGallery: false,
       editable: 'no',
-    })
+    }))
     if (!res.webPath) throw new Error('Camera returned no image')
     return await toFile(res.webPath, 'photo')
   } catch (err) {
@@ -55,7 +56,7 @@ export async function nativeTakePhoto(): Promise<File> {
 
 export async function nativeRecordVideo(): Promise<File> {
   try {
-    const res = await Camera.recordVideo({ saveToGallery: false })
+    const res = await withAppLockHold(() => Camera.recordVideo({ saveToGallery: false }))
     if (!res.webPath) throw new Error('Camera returned no video')
     return await toFile(res.webPath, 'video')
   } catch (err) {

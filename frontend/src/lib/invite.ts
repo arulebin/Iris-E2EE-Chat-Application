@@ -1,5 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 import { Share } from "@capacitor/share";
+import { withAppLockHold } from "./appLockGuard";
 import { apiBase, publicAppUrl } from "./config";
 import type { UserProfile } from "../types";
 
@@ -44,11 +45,11 @@ export async function shareInvite(url: string): Promise<"shared" | "copied" | "c
   const text = "Add me on Iris — private, end-to-end encrypted chat";
   try {
     if (Capacitor.isNativePlatform()) {
-      await Share.share({ title: "Add me on Iris", text, url, dialogTitle: "Share invite" });
+      await withAppLockHold(() => Share.share({ title: "Add me on Iris", text, url, dialogTitle: "Share invite" }));
       return "shared";
     }
     if (navigator.share) {
-      await navigator.share({ title: "Add me on Iris", text, url });
+      await withAppLockHold(() => navigator.share({ title: "Add me on Iris", text, url }));
       return "shared";
     }
   } catch (err) {
