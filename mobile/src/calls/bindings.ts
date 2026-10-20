@@ -126,15 +126,15 @@ export function startNativeBindings(engine: CallEngine, o: BindingOptions): () =
       const known = currentCall(s)
       switch (a.action) {
         case 'open':
-          if (s.kind === 'idle' && a.callId && a.from) engine.announceIncoming({ from: a.from, callId: a.callId, mode })
+          if (s.kind === 'idle' && a.callId) engine.announceIncoming({ from: a.from || undefined, callId: a.callId, mode })
           break
         case 'answer':
-          if (s.kind === 'idle' && a.callId && a.from) engine.announceIncoming({ from: a.from, callId: a.callId, mode })
+          if (s.kind === 'idle' && a.callId) engine.announceIncoming({ from: a.from || undefined, callId: a.callId, mode })
           if (known && a.callId && known.callId !== a.callId) break
           void o.accept(true)
           break
         case 'decline':
-          if (s.kind === 'idle' && a.callId && a.from) engine.announceIncoming({ from: a.from, callId: a.callId, mode })
+          if (s.kind === 'idle' && a.callId) engine.announceIncoming({ from: a.from || undefined, callId: a.callId, mode })
           if (!known || !a.callId || known.callId === a.callId) {
             engine.reject()
             // Declined from the notification of a dead app: go back to wherever the user was.
