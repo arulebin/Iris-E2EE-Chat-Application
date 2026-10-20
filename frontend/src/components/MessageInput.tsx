@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { ChatMessage } from "../types";
 import { CameraCapture } from "./CameraCapture";
+import { MAX_MESSAGE_CHARS } from "../lib/limits";
 import { CameraIcon, ImageIcon, SendIcon, SmileIcon, TimerIcon, XIcon } from "./icons";
 
 type Props = {
@@ -146,9 +147,15 @@ export function MessageInput({
             Snap mode — next photo or video will self-destruct after viewing
           </div>
         )}
+        {value.length >= MAX_MESSAGE_CHARS && (
+          <div className="mb-2 px-3 py-1.5 rounded-full bg-danger/10 text-danger text-xs font-medium" role="status">
+            Message limit reached ({MAX_MESSAGE_CHARS.toLocaleString()} characters) — send the rest separately
+          </div>
+        )}
         <div className="flex items-center gap-2 bg-card rounded-full px-4 py-2 shadow-sm">
           <input
             value={value}
+            maxLength={MAX_MESSAGE_CHARS}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !disabled && onSend()}
             placeholder={uploading ? "Uploading…" : "Type here..."}

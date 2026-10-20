@@ -1,4 +1,5 @@
 import { apiBase } from "./config";
+import { apiFetch } from "./api";
 import { MEDIA_CRYPTO_OVERHEAD, decryptMediaBytes, encryptMediaBytes } from "../crypto";
 
 // 50MB cap matches the backend's MediaController.MAX_BYTES. That limit applies to
@@ -34,7 +35,7 @@ export async function uploadMedia(file: File, token: string): Promise<UploadedMe
   const form = new FormData();
   form.append("file", new Blob([ciphertext], { type: "application/octet-stream" }), "media.bin");
 
-  const res = await fetch(`${apiBase}/api/media`, {
+  const res = await apiFetch(`${apiBase}/api/media`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}` },
     body: form,
@@ -107,7 +108,7 @@ export function fetchMediaObjectURL(
     return mediaCache.get(mediaId)!;
   }
 
-  const promise = fetch(`${apiBase}/api/media/${encodeURIComponent(mediaId)}`, {
+  const promise = apiFetch(`${apiBase}/api/media/${encodeURIComponent(mediaId)}`, {
     headers: { Authorization: `Bearer ${token}` },
   }).then(async (res) => {
     if (!res.ok) throw new Error(`Media fetch failed: ${res.status}`);

@@ -1,6 +1,7 @@
 import { get, set } from 'idb-keyval'
 import { FingerprintGenerator } from '@privacyresearch/libsignal-protocol-typescript'
 import { apiBase } from './config'
+import { apiFetch } from './api'
 import { verifyLegacySignature } from '../crypto'
 import { signalApi } from './signal/api'
 import { ab } from './signal/device'
@@ -99,7 +100,7 @@ export function formatSafetyNumber(digits: string): string[] {
 
 /** Server-published public JWK for `username` (unauthenticated identity claim). */
 export async function fetchPublicJwk(username: string, token: string): Promise<JsonWebKey> {
-  const res = await fetch(`${apiBase}/api/keys/${encodeURIComponent(username)}`, {
+  const res = await apiFetch(`${apiBase}/api/keys/${encodeURIComponent(username)}`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new Error(`Failed to fetch public key for ${username}: ${res.status}`)

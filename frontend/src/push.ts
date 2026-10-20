@@ -1,5 +1,6 @@
 import { Capacitor } from '@capacitor/core'
 import { apiBase } from './lib/config'
+import { apiFetch } from './lib/api'
 import {
   disableNativeNotifications,
   enableNativeNotifications,
@@ -43,7 +44,7 @@ export async function enableNotifications(token: string): Promise<PushSubscripti
   const reg = await navigator.serviceWorker.ready
 
   // 3. Get the VAPID public key from our backend
-  const keyRes = await fetch(`${apiBase}/api/push/vapid-public-key`, {
+  const keyRes = await apiFetch(`${apiBase}/api/push/vapid-public-key`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!keyRes.ok) throw new Error('Failed to fetch VAPID public key')
@@ -57,7 +58,7 @@ export async function enableNotifications(token: string): Promise<PushSubscripti
   })
 
   // 5. Send subscription to backend (its toJSON() matches our DTO shape)
-  const upRes = await fetch(`${apiBase}/api/push/subscribe`, {
+  const upRes = await apiFetch(`${apiBase}/api/push/subscribe`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

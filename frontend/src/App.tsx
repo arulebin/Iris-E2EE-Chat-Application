@@ -20,6 +20,14 @@ import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { logIn, signUp, unlockKeyMaterial } from "./lib/credentials";
 import { uploadMedia, buildMediaEnvelope, parseMediaEnvelope } from "./lib/media";
 import { apiBase, wsURL } from "./lib/config";
+import {
+  apiFetch, ensureFreshToken, getAccessToken, getRefreshToken, logoutSession, refreshAccessToken,
+  setSessionDevice, AuthExpiredError, AUTH_EXPIRED_EVENT,
+} from "./lib/api";
+import { startHeartbeat, type Heartbeat } from "./lib/heartbeat";
+import { MAX_MESSAGE_CHARS } from "./lib/limits";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
 
 import { AppShell } from "./components/AppShell";
 import { Splash } from "./components/Splash";
@@ -41,9 +49,13 @@ const UNDECRYPTABLE = "🔒 Encrypted with a different key — can't be read on 
 
 function App() {
   // ── auth state ──────────────────────────────────────────────────
+  // `token` is the session's identity (who's logged in), not necessarily the current
+  // access JWT: lib/api renews that behind the scenes and every request reads it
+  // from there. So an expired access token is fine at boot as long as a refresh
+  // token can renew it.
   const [token, setToken] = useState<string | null>(() => {
     const stored = localStorage.getItem("token");
-    if (isTokenExpired(stored)) {
+    if (isTokenExpired(stored) && !getRefreshToken()) {
       localStorage.removeItem("token");
       return null;
     }
@@ -142,6 +154,7 @@ function App() {
   const decryptIncomingRef = useRef<((m: ChatMessage) => Promise<ChatMessage>) | null>(null);
   const meRef = useRef<string | null>(null);
   const handleDeviceRevokedRef = useRef<(() => Promise<void>) | null>(null);
+  const resetSessionRef = useRef<(() => void) | null>(null);
   const refreshFriendsRef = useRef<(() => void) | null>(null);
 
   const me = getUsername(token);
@@ -191,8 +204,15 @@ function App() {
   }
 
   function handleLogout() {
-    if (token) void disableNotifications(token);
-    localStorage.removeItem("token");
+    // Unsubscribe push while still authenticated, then end the login server-side.
+    const unsubscribe = token ? disableNotifications(token).catch(() => {}) : Promise.resolve();
+    void unsubscribe.finally(() => logoutSession());
+    resetSession();
+  }
+
+  // Local teardown shared by logout and "session expired" (lib/api already cleared
+  // the stored tokens in that case).
+  function resetSession() {
     setToken(null);
     setMessages([]);
     setUsers([]);
@@ -245,19 +265,22 @@ function App() {
     nav.brave?.isBrave?.().then(setIsBrave).catch(() => {});
   }, []);
 
-  // We no longer auto-logout based on exp timestamp.
-  // The token is persistent until manual logout.
+  // The login only ends when lib/api says so: the refresh token was rejected
+  // (expired after 30 idle days, revoked by logout/device removal, or reused).
+  useEffect(() => {
+    const onExpired = () => resetSessionRef.current?.();
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, []);
+
+  // Renew at boot/login so a long-idle tab doesn't start on a dead access token. A
+  // login from before refresh tokens existed can't renew: once its JWT has expired
+  // it's sent back to the login screen, as before.
   useEffect(() => {
     if (!token) return;
-    const expiryMs = getTokenExpiryMs(token);
-    if (expiryMs === null) return;
-    const timeUntilExpiry = expiryMs - Date.now();
-    if (timeUntilExpiry <= 0) {
-      // Clean up if somehow an old expired token slipped through
-      setTimeout(() => {
-        localStorage.removeItem("token");
-        setToken(null);
-      }, 0);
+    ensureFreshToken().catch(() => { /* AuthExpiredError → event above */ });
+    if (!getRefreshToken() && (getTokenExpiryMs(token) ?? Infinity) <= Date.now()) {
+      resetSessionRef.current?.();
     }
   }, [token]);
 
@@ -340,7 +363,7 @@ function App() {
       }).catch(console.error);
     }
 
-    fetch(`${apiBase}/api/users`, {
+    apiFetch(`${apiBase}/api/users`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : []))
@@ -350,7 +373,7 @@ function App() {
       })
       .catch(() => { /* offline silently handled */ });
 
-    fetch(`${apiBase}/api/users/${me}`, {
+    apiFetch(`${apiBase}/api/users/${me}`, {
       headers: { Authorization: `Bearer ${token}` },
     }).then(res => res.ok ? res.json() : undefined)
       .then(profile => {
@@ -361,7 +384,7 @@ function App() {
     const params = new URLSearchParams(window.location.search);
     const shareIdToAdd = params.get("add");
     if (shareIdToAdd) {
-      fetch(`${apiBase}/api/users/by-share/${shareIdToAdd}`, {
+      apiFetch(`${apiBase}/api/users/by-share/${shareIdToAdd}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then(res => res.ok ? res.json() : null)
@@ -382,7 +405,7 @@ function App() {
     }
 
     // fetch pending friend requests
-    fetch(`${apiBase}/api/friends/requests/incoming`, {
+    apiFetch(`${apiBase}/api/friends/requests/incoming`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(res => res.ok ? res.json() : [])
@@ -429,7 +452,7 @@ function App() {
       }
     }).catch(console.error);
 
-    fetch(`${apiBase}/api/messages?with=${encodeURIComponent(recipient)}`, {
+    apiFetch(`${apiBase}/api/messages?with=${encodeURIComponent(recipient)}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : []))
@@ -516,7 +539,7 @@ function App() {
   const refreshFriends = useCallback(() => {
     if (!token) return;
     const headers = { Authorization: `Bearer ${token}` };
-    fetch(`${apiBase}/api/users`, { headers })
+    apiFetch(`${apiBase}/api/users`, { headers })
       .then((res) => (res.ok ? res.json() : null))
       .then((list: UserProfile[] | null) => {
         if (!list) return;
@@ -524,7 +547,7 @@ function App() {
         if (me) set(`users_list_${me}`, list).catch(console.error);
       })
       .catch(console.error);
-    fetch(`${apiBase}/api/friends/requests/incoming`, { headers })
+    apiFetch(`${apiBase}/api/friends/requests/incoming`, { headers })
       .then((res) => (res.ok ? res.json() : null))
       .then((reqs: FriendRequest[] | null) => { if (reqs) setFriendRequests(reqs); })
       .catch(console.error);
@@ -537,6 +560,7 @@ function App() {
     meRef.current = me;
     handleDeviceRevokedRef.current = handleDeviceRevoked;
     refreshFriendsRef.current = refreshFriends;
+    resetSessionRef.current = resetSession;
   });
 
   // WebSocket lifecycle: connects on login, reconnects with exponential backoff on drop
@@ -546,15 +570,33 @@ function App() {
     let destroyed = false;
     let retryDelay = 1_000;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // Sockets that closed without ever opening — usually a rejected (401) handshake.
+    let failedHandshakes = 0;
+    let heartbeat: Heartbeat | null = null;
 
-    function connect() {
+    async function connect() {
       if (destroyed) return;
+      let accessToken: string | null;
+      try {
+        // A handshake that keeps failing with an unexpired token means the server
+        // rejected it: force a refresh instead of retrying the same token forever.
+        accessToken = failedHandshakes >= 2 ? await refreshAccessToken() : await ensureFreshToken();
+      } catch (err) {
+        if (err instanceof AuthExpiredError) return; // session reset via AUTH_EXPIRED_EVENT
+        accessToken = getAccessToken(); // offline — try anyway; the backoff continues
+      }
+      if (destroyed || !accessToken) return;
       // Connecting AS a Signal device lets the server route per-device envelopes here.
       const device = signalDeviceId ? `&device=${signalDeviceId}` : "";
-      const ws = new WebSocket(wsURL(`/ws/chat?token=${token}${device}`));
+      const ws = new WebSocket(wsURL(`/ws/chat?token=${accessToken}${device}`));
       wsRef.current = ws;
+      let opened = false;
+      const hb = startHeartbeat(ws);
+      heartbeat = hb;
 
       ws.onopen = () => {
+        opened = true;
+        failedHandshakes = 0;
         retryDelay = 1_000;
         ws.send(JSON.stringify({
           type: "visibility",
@@ -568,6 +610,7 @@ function App() {
       ws.onmessage = async (e) => {
         try {
           const data = JSON.parse(e.data);
+          if (data?.type === "pong") { hb.onPong(); return; }
           if (data && typeof data.type === "string" && data.type.startsWith("call-")) {
             await handleSignalRef.current?.(data as CallSignal);
             return;
@@ -635,25 +678,67 @@ function App() {
       };
 
       ws.onclose = () => {
+        hb.stop();
+        if (heartbeat === hb) heartbeat = null;
+        if (!opened) failedHandshakes++;
+        // A socket wake() already replaced must not schedule a second reconnect.
+        if (wsRef.current !== ws) return;
         wsRef.current = null;
-        if (!destroyed) {
-          retryTimer = setTimeout(() => {
-            retryDelay = Math.min(retryDelay * 2, 30_000);
-            connect();
-          }, retryDelay);
-        }
+        scheduleReconnect();
       };
     }
 
-    connect();
+    function scheduleReconnect() {
+      if (destroyed) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        retryDelay = Math.min(retryDelay * 2, 30_000);
+        void connect();
+      }, retryDelay);
+    }
+
+    // Back online / foregrounded / app resumed: check the socket now instead of
+    // sitting out the backoff (or a half-open socket's silence).
+    function wake() {
+      if (destroyed) return;
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) { heartbeat?.probe(); return; }
+      if (ws?.readyState === WebSocket.CONNECTING) return;
+      wsRef.current = null; // a CLOSING socket is abandoned; its onclose won't reconnect
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+      retryDelay = 1_000;
+      void connect();
+    }
+    const onVisible = () => { if (!document.hidden) wake(); };
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", onVisible);
+    let resumeHandle: PluginListenerHandle | null = null;
+    if (Capacitor.isNativePlatform()) {
+      void CapacitorApp.addListener("resume", wake).then((h) => {
+        if (destroyed) void h.remove(); else resumeHandle = h;
+      });
+    }
+
+    void connect();
 
     return () => {
       destroyed = true;
       if (retryTimer) clearTimeout(retryTimer);
+      window.removeEventListener("online", wake);
+      document.removeEventListener("visibilitychange", onVisible);
+      void resumeHandle?.remove();
+      heartbeat?.stop();
       wsRef.current?.close();
       wsRef.current = null;
     };
   }, [token, signalDeviceId, appendMessage, updatePeerLive]);
+
+  // Ties this login's refresh token to its Signal device, so removing the device
+  // (from another one) also ends this login.
+  useEffect(() => {
+    if (signalDeviceId) setSessionDevice(signalDeviceId);
+  }, [signalDeviceId]);
 
   // ── recipient selection (from list view) ────────────────────────
   function selectRecipient(user: string) {
@@ -699,6 +784,9 @@ function App() {
   // ── send chat message ───────────────────────────────────────────
   async function send() {
     if (input.trim() === "" || recipient.trim() === "") return;
+    // The input enforces this too; a paste via other paths must not produce a
+    // frame the server would refuse (MessageInput shows why).
+    if (input.length > MAX_MESSAGE_CHARS) return;
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
     // Never encrypt to a key the user hasn't accepted after a key change.
     if (!me || await isSendBlocked(me, recipient)) return;
@@ -1098,13 +1186,13 @@ function App() {
 
   async function handleAcceptRequest(id: number) {
     if (!token) return;
-    const res = await fetch(`${apiBase}/api/friends/requests/${id}/accept`, {
+    const res = await apiFetch(`${apiBase}/api/friends/requests/${id}/accept`, {
       method: "PUT", headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
       setFriendRequests(prev => prev.filter(r => r.id !== id));
       // refresh user list so the new friend appears
-      fetch(`${apiBase}/api/users`, { headers: { Authorization: `Bearer ${token}` } })
+      apiFetch(`${apiBase}/api/users`, { headers: { Authorization: `Bearer ${token}` } })
         .then(r => r.ok ? r.json() : [])
         .then(setUsers).catch(console.error);
     }
@@ -1112,7 +1200,7 @@ function App() {
 
   async function handleRejectRequest(id: number) {
     if (!token) return;
-    const res = await fetch(`${apiBase}/api/friends/requests/${id}/reject`, {
+    const res = await apiFetch(`${apiBase}/api/friends/requests/${id}/reject`, {
       method: "PUT", headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) setFriendRequests(prev => prev.filter(r => r.id !== id));
@@ -1120,7 +1208,7 @@ function App() {
 
   async function handleSendRequest(shareId: string) {
     if (!token) return;
-    await fetch(`${apiBase}/api/friends/request`, {
+    await apiFetch(`${apiBase}/api/friends/request`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ toShareId: shareId }),
@@ -1136,7 +1224,7 @@ function App() {
       const formData = new FormData();
       formData.append("file", file);
       
-      const res = await fetch(`${apiBase}/api/media/profile`, {
+      const res = await apiFetch(`${apiBase}/api/media/profile`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
@@ -1146,7 +1234,7 @@ function App() {
       avatarUrl = data.mediaId;
     }
 
-    const res2 = await fetch(`${apiBase}/api/users/profile`, {
+    const res2 = await apiFetch(`${apiBase}/api/users/profile`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,

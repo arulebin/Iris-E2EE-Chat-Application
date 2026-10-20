@@ -1,6 +1,7 @@
 // WebRTC helpers — peer connection setup + signal types
 
 import { apiBase } from './lib/config';
+import { apiFetch } from './lib/api';
 
 export type CallSignal =
   | { type: 'call-offer';  to: string; from?: string; payload: RTCSessionDescriptionInit; mode?: 'audio' | 'video' }
@@ -10,7 +11,7 @@ export type CallSignal =
 
 async function getIceServers(token: string | null): Promise<RTCConfiguration> {
   try {
-    const res = await fetch(`${apiBase}/api/turn/credentials`, {
+    const res = await apiFetch(`${apiBase}/api/turn/credentials`, {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (res.ok) {
