@@ -4,6 +4,11 @@ import { BackIcon, BellIcon, LogoutIcon } from "./icons";
 import { Avatar } from "./Avatar";
 import { getThemePref, setThemePref, type ThemePref } from "../lib/theme";
 import { useProfileImage } from "../lib/profileImage";
+import {
+  getScreenSecurityPref,
+  screenSecuritySupported,
+  setScreenSecurityPref,
+} from "../lib/screenSecurity";
 
 type Props = {
   me: string | null;
@@ -37,7 +42,14 @@ export function SettingsView({
   const [themePref, setLocalTheme] = useState<ThemePref>(getThemePref());
   const qrAvatarSrc = useProfileImage(meProfile?.avatarUrl);
 
+  const [screenSecure, setScreenSecure] = useState(getScreenSecurityPref);
+
   const changeTheme = (p: ThemePref) => { setLocalTheme(p); setThemePref(p); };
+  const toggleScreenSecurity = () => {
+    const next = !screenSecure;
+    setScreenSecure(next);
+    setScreenSecurityPref(next);
+  };
 
   const inviteUrl = `${window.location.origin}/?add=${shareId ?? me}`;
 
@@ -139,6 +151,37 @@ export function SettingsView({
             ))}
           </div>
         </section>
+
+        {screenSecuritySupported() && (
+          <section>
+            <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
+              Privacy
+            </p>
+            <div className="bg-card rounded-2xl px-4 py-3 shadow-sm dark:border dark:border-muted-soft flex items-center justify-between gap-4">
+              <div>
+                <p className="text-navy text-sm font-semibold">Screen security</p>
+                <p className="text-xs text-muted leading-snug mt-0.5">
+                  Block screenshots and hide Iris in the recent-apps screen. Snaps are always protected.
+                </p>
+              </div>
+              <button
+                role="switch"
+                aria-checked={screenSecure}
+                aria-label="Screen security"
+                onClick={toggleScreenSecurity}
+                className={`relative shrink-0 w-11 h-6 rounded-full transition ${
+                  screenSecure ? "bg-primary" : "bg-muted-soft"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                    screenSecure ? "translate-x-5" : ""
+                  }`}
+                />
+              </button>
+            </div>
+          </section>
+        )}
 
         <section>
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">

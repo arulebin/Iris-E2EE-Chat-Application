@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchMediaObjectURL } from "../lib/media";
+import { acquireScreenSecurity } from "../lib/screenSecurity";
 import { XIcon } from "./icons";
 
 type Props = {
@@ -14,6 +15,19 @@ type Props = {
 export function SnapViewer({ mediaId, mimeType, mediaKey, token, onClose, onConsumed }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Web can't block screenshots, but it can stop the app switcher / a
+  // backgrounded tab from showing the snap: hide content while not visible.
+  const [hidden, setHidden] = useState(() => document.visibilityState === "hidden");
+
+  // Android app: FLAG_SECURE for as long as a snap is on screen, regardless of
+  // the app-wide setting.
+  useEffect(() => acquireScreenSecurity(), []);
+
+  useEffect(() => {
+    const onVisibility = () => setHidden(document.visibilityState === "hidden");
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
 
   const consumedRef = useRef(false);
   // onConsumed is captured by ref so its identity changing across parent
@@ -80,14 +94,14 @@ export function SnapViewer({ mediaId, mimeType, mediaKey, token, onClose, onCons
           autoPlay
           playsInline
           onEnded={onClose}
-          className="max-w-full max-h-full"
+          className={`max-w-full max-h-full transition ${hidden ? "blur-3xl opacity-0" : ""}`}
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
         <img
           src={src}
           alt=""
-          className="max-w-full max-h-full object-contain"
+          className={`max-w-full max-h-full object-contain transition ${hidden ? "blur-3xl opacity-0" : ""}`}
           onClick={(e) => e.stopPropagation()}
         />
       )}
