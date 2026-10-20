@@ -4,19 +4,21 @@ type Props = {
   name: string;
   avatarUrl?: string;
   online?: boolean;
-  size?: "sm" | "md" | "lg";
+  size?: "sm" | "md" | "lg" | "xl";
 };
 
 const SIZE_CLASSES: Record<NonNullable<Props["size"]>, string> = {
   sm: "w-8 h-8 text-xs",
   md: "w-10 h-10 text-sm",
   lg: "w-12 h-12 text-base",
+  xl: "w-28 h-28 text-4xl",
 };
 
 const DOT_CLASSES: Record<NonNullable<Props["size"]>, string> = {
   sm: "w-2 h-2 right-0 top-0",
   md: "w-2.5 h-2.5 right-0 top-0",
   lg: "w-3 h-3 right-0 top-0",
+  xl: "w-4 h-4 right-2 top-2",
 };
 
 // Deterministic avatar color from the username so a given user always looks the same.

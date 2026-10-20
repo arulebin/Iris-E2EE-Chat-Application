@@ -13,13 +13,20 @@ import { NotV2Error } from "./lib/signal/messaging";
 import { getLegacyCache, getMessages, isEmpty as v2HistoryEmpty, mergeHistory, migrateHistory, patchMessage, setLegacyCache } from "./lib/messageStore";
 import { fetchBackupMeta, isRestoreDismissed, maybeAutoBackup } from "./lib/backup";
 import { disableNotifications, enableNotifications, hasExistingSubscription } from "./push";
-import { createPeerConnection, type CallSignal } from "./webrtc";
-import { playRingback, playRingtone, stopTone } from "./lib/sound";
-import type { ChatMessage, CallState, CallMode, UserProfile, FriendRequest } from "./types";
+import type { CallSignal } from "./webrtc";
+import type { ChatMessage, UserProfile, FriendRequest } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { logIn, signUp, unlockKeyMaterial } from "./lib/credentials";
 import { uploadMedia, buildMediaEnvelope, parseMediaEnvelope } from "./lib/media";
 import { apiBase, wsURL } from "./lib/config";
+import {
+  apiFetch, ensureFreshToken, getAccessToken, getRefreshToken, logoutSession, refreshAccessToken,
+  setSessionDevice, AuthExpiredError, AUTH_EXPIRED_EVENT,
+} from "./lib/api";
+import { startHeartbeat, type Heartbeat } from "./lib/heartbeat";
+import { MAX_MESSAGE_CHARS } from "./lib/limits";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
 
 import { AppShell } from "./components/AppShell";
 import { Splash } from "./components/Splash";
@@ -27,13 +34,25 @@ import { AuthView } from "./components/AuthView";
 import { ChatListView } from "./components/ChatListView";
 import { ConversationView } from "./components/ConversationView";
 import { SettingsView } from "./components/SettingsView";
-import { IncomingCallModal } from "./components/IncomingCallModal";
-import { CallNoticeBanner } from "./components/CallNoticeBanner";
-import { VideoCallScreen } from "./components/VideoCallScreen";
+import { CallLayer } from "./components/call/CallLayer";
+import { useCall } from "./lib/call/useCall";
 import { UnlockKeyView } from "./components/UnlockKeyView";
 import { BackupSettings } from "./components/BackupSettings";
 import { DevicesSettings } from "./components/DevicesSettings";
 import { RestoreBackupPrompt } from "./components/RestoreBackupPrompt";
+import { PrivacySettings } from "./components/PrivacySettings";
+import { AddContactSheet } from "./components/AddContactSheet";
+import { isLegacyShareId } from "./lib/invite";
+import { GroupsPanel } from "./components/GroupsPanel";
+import { CreateGroupSheet } from "./components/CreateGroupSheet";
+import { GroupConversationView } from "./components/GroupConversationView";
+import { JoinGroupPrompt } from "./components/JoinGroupPrompt";
+import type { Tab as ListTab } from "./components/ChatListView";
+import { useGroups } from "./lib/groups/useGroups";
+import type { GroupDto } from "./lib/groups/api";
+import { publishGroupEvent, routeGroupFrame } from "./lib/groups/bus";
+import { groupIdOfPeer } from "./lib/groups/payload";
+import { inviteTokenFromLocation } from "./lib/groups/invite";
 
 // Shown in place of a message we can't open with the current key. Kept as a
 // constant so the cache layer can recognise (and refuse to persist) failures.
@@ -41,9 +60,13 @@ const UNDECRYPTABLE = "🔒 Encrypted with a different key — can't be read on 
 
 function App() {
   // ── auth state ──────────────────────────────────────────────────
+  // `token` is the session's identity (who's logged in), not necessarily the current
+  // access JWT: lib/api renews that behind the scenes and every request reads it
+  // from there. So an expired access token is fine at boot as long as a refresh
+  // token can renew it.
   const [token, setToken] = useState<string | null>(() => {
     const stored = localStorage.getItem("token");
-    if (isTokenExpired(stored)) {
+    if (isTokenExpired(stored) && !getRefreshToken()) {
       localStorage.removeItem("token");
       return null;
     }
@@ -94,23 +117,21 @@ function App() {
   const [pushError, setPushError] = useState<string | null>(null);
   const [isBrave, setIsBrave] = useState(false);
 
-  // ── call state ──────────────────────────────────────────────────
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  // ── call state (all call logic lives in useCall) ──────────────
   const handleSignalRef = useRef<((s: CallSignal) => Promise<void>) | null>(null);
-  const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const audioSinkRef = useRef<HTMLAudioElement | null>(null);
-  const [callState, setCallState] = useState<CallState>({ kind: "idle" });
-  const [callNotice, setCallNotice] = useState<string | null>(null);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isCameraOff, setIsCameraOff] = useState(false);
-  const [speakerOn, setSpeakerOn] = useState(true);
-  const [reconnecting, setReconnecting] = useState(false);
+  const callSocketOpenRef = useRef<(() => void) | null>(null);
+  const call = useCall({ token, wsRef, onAccepted: (peer) => selectRecipientRef.current?.(peer) });
+  const callState = call.state;
+  const selectRecipientRef = useRef<((user: string) => void) | null>(null);
 
   // ── friend requests ─────────────────────────────────────────────
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
+  // null = closed; otherwise the add-by-invite sheet, pre-filled with this code ("" = empty).
+  // Seeded from an opened invite link (?add=CODE) so it survives the login screen.
+  const [addInvite, setAddInvite] = useState<string | null>(() => {
+    const add = new URLSearchParams(window.location.search).get("add");
+    return add && !isLegacyShareId(add) ? add : null;
+  });
   // Open conversation's live status (all metadata the server already relays).
   // Keyed by peer, like contactKeys, so switching chats needs no reset.
   const [peerLive, setPeerLive] = useState<{ peer: string; online: boolean; typing: boolean; readAt: number }>(
@@ -129,12 +150,14 @@ function App() {
   const recipient = chatMatch ? decodeURIComponent(chatMatch[1]) : "";
   const recipientPublicKey = contactKeys?.peer === recipient ? contactKeys.rsaKey : null;
   const recipientIdentity = contactKeys?.peer === recipient ? contactKeys.identityKey : null;
+  const groupMatch = /^\/group\/([^/]+)$/.exec(location.pathname);
+  const openGroupId = groupMatch ? decodeURIComponent(groupMatch[1]) : null;
   const view = location.pathname === "/settings" ? "settings"
              : chatMatch                          ? "chat"
+             : groupMatch                         ? "group"
              :                                     "list";
 
   const [showSplash, setShowSplash] = useState(true);
-  const [callMinimized, setCallMinimized] = useState(false);
 
   // Refs read by the long-lived ws.onmessage handler. Synced by a deps-less effect
   // below so the WS effect's deps stay [token] (no reconnect on sidebar clicks).
@@ -142,9 +165,21 @@ function App() {
   const decryptIncomingRef = useRef<((m: ChatMessage) => Promise<ChatMessage>) | null>(null);
   const meRef = useRef<string | null>(null);
   const handleDeviceRevokedRef = useRef<(() => Promise<void>) | null>(null);
+  const resetSessionRef = useRef<(() => void) | null>(null);
   const refreshFriendsRef = useRef<(() => void) | null>(null);
 
   const me = getUsername(token);
+
+  // ── groups ───────────────────────────────────────────────────────
+  const { groups, previews: groupPreviews, setGroups } = useGroups(token, me);
+  const openGroup = openGroupId ? groups.find((g) => g.id === openGroupId) ?? null : null;
+  const [listTab, setListTab] = useState<ListTab>("messages");
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  // An invite link (?group=<token>) the app was opened with.
+  const [groupInvite, setGroupInvite] = useState<string | null>(() => inviteTokenFromLocation());
+  const upsertGroup = useCallback((g: GroupDto) => {
+    setGroups((prev) => (prev.some((x) => x.id === g.id) ? prev.map((x) => (x.id === g.id ? g : x)) : [g, ...prev]));
+  }, [setGroups]);
 
   // ── splash for ~900ms on initial mount ──────────────────────────
   useEffect(() => {
@@ -191,8 +226,15 @@ function App() {
   }
 
   function handleLogout() {
-    if (token) void disableNotifications(token);
-    localStorage.removeItem("token");
+    // Unsubscribe push while still authenticated, then end the login server-side.
+    const unsubscribe = token ? disableNotifications(token).catch(() => {}) : Promise.resolve();
+    void unsubscribe.finally(() => logoutSession());
+    resetSession();
+  }
+
+  // Local teardown shared by logout and "session expired" (lib/api already cleared
+  // the stored tokens in that case).
+  function resetSession() {
     setToken(null);
     setMessages([]);
     setUsers([]);
@@ -245,19 +287,22 @@ function App() {
     nav.brave?.isBrave?.().then(setIsBrave).catch(() => {});
   }, []);
 
-  // We no longer auto-logout based on exp timestamp.
-  // The token is persistent until manual logout.
+  // The login only ends when lib/api says so: the refresh token was rejected
+  // (expired after 30 idle days, revoked by logout/device removal, or reused).
+  useEffect(() => {
+    const onExpired = () => resetSessionRef.current?.();
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, []);
+
+  // Renew at boot/login so a long-idle tab doesn't start on a dead access token. A
+  // login from before refresh tokens existed can't renew: once its JWT has expired
+  // it's sent back to the login screen, as before.
   useEffect(() => {
     if (!token) return;
-    const expiryMs = getTokenExpiryMs(token);
-    if (expiryMs === null) return;
-    const timeUntilExpiry = expiryMs - Date.now();
-    if (timeUntilExpiry <= 0) {
-      // Clean up if somehow an old expired token slipped through
-      setTimeout(() => {
-        localStorage.removeItem("token");
-        setToken(null);
-      }, 0);
+    ensureFreshToken().catch(() => { /* AuthExpiredError → event above */ });
+    if (!getRefreshToken() && (getTokenExpiryMs(token) ?? Infinity) <= Date.now()) {
+      resetSessionRef.current?.();
     }
   }, [token]);
 
@@ -340,7 +385,7 @@ function App() {
       }).catch(console.error);
     }
 
-    fetch(`${apiBase}/api/users`, {
+    apiFetch(`${apiBase}/api/users`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : []))
@@ -350,18 +395,21 @@ function App() {
       })
       .catch(() => { /* offline silently handled */ });
 
-    fetch(`${apiBase}/api/users/${me}`, {
+    apiFetch(`${apiBase}/api/users/${me}`, {
       headers: { Authorization: `Bearer ${token}` },
     }).then(res => res.ok ? res.json() : undefined)
       .then(profile => {
         if (profile) setMeProfile(profile);
       }).catch(console.error);
 
-    // check URL for ?add=<shareId> parameter
+    // ?add=<inviteCode> opens the add-contact sheet; ?add=<uuid> is a legacy share
+    // link, which still opens a chat with a (public) profile.
     const params = new URLSearchParams(window.location.search);
-    const shareIdToAdd = params.get("add");
+    const addParam = params.get("add");
+    const shareIdToAdd = addParam && isLegacyShareId(addParam) ? addParam : null;
+    if (addParam && !shareIdToAdd) navigate("/", { replace: true });   // sheet already seeded
     if (shareIdToAdd) {
-      fetch(`${apiBase}/api/users/by-share/${shareIdToAdd}`, {
+      apiFetch(`${apiBase}/api/users/by-share/${shareIdToAdd}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then(res => res.ok ? res.json() : null)
@@ -382,7 +430,7 @@ function App() {
     }
 
     // fetch pending friend requests
-    fetch(`${apiBase}/api/friends/requests/incoming`, {
+    apiFetch(`${apiBase}/api/friends/requests/incoming`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(res => res.ok ? res.json() : [])
@@ -429,7 +477,7 @@ function App() {
       }
     }).catch(console.error);
 
-    fetch(`${apiBase}/api/messages?with=${encodeURIComponent(recipient)}`, {
+    apiFetch(`${apiBase}/api/messages?with=${encodeURIComponent(recipient)}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => (res.ok ? res.json() : []))
@@ -516,7 +564,7 @@ function App() {
   const refreshFriends = useCallback(() => {
     if (!token) return;
     const headers = { Authorization: `Bearer ${token}` };
-    fetch(`${apiBase}/api/users`, { headers })
+    apiFetch(`${apiBase}/api/users`, { headers })
       .then((res) => (res.ok ? res.json() : null))
       .then((list: UserProfile[] | null) => {
         if (!list) return;
@@ -524,7 +572,7 @@ function App() {
         if (me) set(`users_list_${me}`, list).catch(console.error);
       })
       .catch(console.error);
-    fetch(`${apiBase}/api/friends/requests/incoming`, { headers })
+    apiFetch(`${apiBase}/api/friends/requests/incoming`, { headers })
       .then((res) => (res.ok ? res.json() : null))
       .then((reqs: FriendRequest[] | null) => { if (reqs) setFriendRequests(reqs); })
       .catch(console.error);
@@ -537,6 +585,7 @@ function App() {
     meRef.current = me;
     handleDeviceRevokedRef.current = handleDeviceRevoked;
     refreshFriendsRef.current = refreshFriends;
+    resetSessionRef.current = resetSession;
   });
 
   // WebSocket lifecycle: connects on login, reconnects with exponential backoff on drop
@@ -546,15 +595,33 @@ function App() {
     let destroyed = false;
     let retryDelay = 1_000;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    // Sockets that closed without ever opening — usually a rejected (401) handshake.
+    let failedHandshakes = 0;
+    let heartbeat: Heartbeat | null = null;
 
-    function connect() {
+    async function connect() {
       if (destroyed) return;
+      let accessToken: string | null;
+      try {
+        // A handshake that keeps failing with an unexpired token means the server
+        // rejected it: force a refresh instead of retrying the same token forever.
+        accessToken = failedHandshakes >= 2 ? await refreshAccessToken() : await ensureFreshToken();
+      } catch (err) {
+        if (err instanceof AuthExpiredError) return; // session reset via AUTH_EXPIRED_EVENT
+        accessToken = getAccessToken(); // offline — try anyway; the backoff continues
+      }
+      if (destroyed || !accessToken) return;
       // Connecting AS a Signal device lets the server route per-device envelopes here.
       const device = signalDeviceId ? `&device=${signalDeviceId}` : "";
-      const ws = new WebSocket(wsURL(`/ws/chat?token=${token}${device}`));
+      const ws = new WebSocket(wsURL(`/ws/chat?token=${accessToken}${device}`));
       wsRef.current = ws;
+      let opened = false;
+      const hb = startHeartbeat(ws);
+      heartbeat = hb;
 
       ws.onopen = () => {
+        opened = true;
+        failedHandshakes = 0;
         retryDelay = 1_000;
         ws.send(JSON.stringify({
           type: "visibility",
@@ -563,11 +630,13 @@ function App() {
         // Pull envelopes queued while this device was offline.
         if (signalDeviceId) ws.send(JSON.stringify({ type: "sync" }));
         if (recipientRef.current) ws.send(JSON.stringify({ type: "presence-query", user: recipientRef.current }));
+        callSocketOpenRef.current?.();
       };
 
       ws.onmessage = async (e) => {
         try {
           const data = JSON.parse(e.data);
+          if (data?.type === "pong") { hb.onPong(); return; }
           if (data && typeof data.type === "string" && data.type.startsWith("call-")) {
             await handleSignalRef.current?.(data as CallSignal);
             return;
@@ -577,6 +646,8 @@ function App() {
             await handleDeviceRevokedRef.current?.();
             return;
           }
+          // Group typing / "seen by" / membership nudges go to the group screens.
+          if (routeGroupFrame(data)) return;
           if (data?.type === "friends-changed") {
             refreshFriendsRef.current?.();
             return;
@@ -605,6 +676,11 @@ function App() {
             const { peer, message } = await client.open(data as { envType: number; body: string; message: V2Meta });
             // Persisted before the ack, so a crash can't lose a forward-secret message.
             ws.send(JSON.stringify({ type: "ack", ids: [data.envelopeId] }));
+            const groupId = groupIdOfPeer(peer);
+            if (groupId) {
+              publishGroupEvent({ kind: "message", groupId, message });
+              return;
+            }
             if (peer === recipientRef.current) {
               appendMessage(message);
               if (message.from === peer) { updatePeerLive(peer, { typing: false }); sendRead(peer); }
@@ -635,25 +711,70 @@ function App() {
       };
 
       ws.onclose = () => {
+        hb.stop();
+        if (heartbeat === hb) heartbeat = null;
+        if (!opened) failedHandshakes++;
+        // Only act if the ref still points at THIS socket. When the effect re-runs
+        // (e.g. the Signal device id arrives) or wake() replaces the socket, the old
+        // socket's close event can land after the new one was assigned; nulling
+        // unconditionally orphaned the live socket and every send silently bailed.
+        if (wsRef.current !== ws) return;
         wsRef.current = null;
-        if (!destroyed) {
-          retryTimer = setTimeout(() => {
-            retryDelay = Math.min(retryDelay * 2, 30_000);
-            connect();
-          }, retryDelay);
-        }
+        scheduleReconnect();
       };
     }
 
-    connect();
+    function scheduleReconnect() {
+      if (destroyed) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        retryDelay = Math.min(retryDelay * 2, 30_000);
+        void connect();
+      }, retryDelay);
+    }
+
+    // Back online / foregrounded / app resumed: check the socket now instead of
+    // sitting out the backoff (or a half-open socket's silence).
+    function wake() {
+      if (destroyed) return;
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) { heartbeat?.probe(); return; }
+      if (ws?.readyState === WebSocket.CONNECTING) return;
+      wsRef.current = null; // a CLOSING socket is abandoned; its onclose won't reconnect
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+      retryDelay = 1_000;
+      void connect();
+    }
+    const onVisible = () => { if (!document.hidden) wake(); };
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", onVisible);
+    let resumeHandle: PluginListenerHandle | null = null;
+    if (Capacitor.isNativePlatform()) {
+      void CapacitorApp.addListener("resume", wake).then((h) => {
+        if (destroyed) void h.remove(); else resumeHandle = h;
+      });
+    }
+
+    void connect();
 
     return () => {
       destroyed = true;
       if (retryTimer) clearTimeout(retryTimer);
+      window.removeEventListener("online", wake);
+      document.removeEventListener("visibilitychange", onVisible);
+      void resumeHandle?.remove();
+      heartbeat?.stop();
       wsRef.current?.close();
       wsRef.current = null;
     };
   }, [token, signalDeviceId, appendMessage, updatePeerLive]);
+
+  // Ties this login's refresh token to its Signal device, so removing the device
+  // (from another one) also ends this login.
+  useEffect(() => {
+    if (signalDeviceId) setSessionDevice(signalDeviceId);
+  }, [signalDeviceId]);
 
   // ── recipient selection (from list view) ────────────────────────
   function selectRecipient(user: string) {
@@ -697,11 +818,22 @@ function App() {
   }
 
   // ── send chat message ───────────────────────────────────────────
+  // Throws a user-facing Error on failure (shown under the composer); the draft
+  // is kept so nothing the user typed is lost.
   async function send() {
     if (input.trim() === "" || recipient.trim() === "") return;
-    if (wsRef.current?.readyState !== WebSocket.OPEN) return;
+    // The input enforces this too; a paste via other paths must not produce a
+    // frame the server would refuse.
+    if (input.length > MAX_MESSAGE_CHARS) {
+      throw new Error(`Message is too long (max ${MAX_MESSAGE_CHARS.toLocaleString()} characters).`);
+    }
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      throw new Error("Not connected — reconnecting, try again in a moment.");
+    }
     // Never encrypt to a key the user hasn't accepted after a key change.
-    if (!me || await isSendBlocked(me, recipient)) return;
+    if (!me || await isSendBlocked(me, recipient)) {
+      throw new Error("This contact's security key changed — accept it before sending.");
+    }
 
     const text = input;
     const extras: SendExtras = { replyToId: replyTo?.id ?? null };
@@ -710,13 +842,14 @@ function App() {
     sendTyping("stop");
     try {
       if (!(await sendV2(text, extras))) {
-        if (!myPublicKey || !recipientPublicKey) return;
+        if (!myPublicKey || !recipientPublicKey) throw new Error("Encryption keys aren't ready yet — try again in a moment.");
         sendLegacy(await encryptMessage(text, myPublicKey, recipientPublicKey), extras);
       }
       setInput("");
       setReplyTo(null);
     } catch (err) {
       console.error("Send failed", err);
+      throw err instanceof Error ? err : new Error("Message couldn't be sent.");
     }
   }
 
@@ -770,275 +903,12 @@ function App() {
     });
   }
 
-  // ── camera / call lifecycle ─────────────────────────────────────
-  async function startCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
-      });
-      setLocalStream(stream);
-      return stream;
-    } catch (err) {
-      console.error("Camera/mic permission denied or unavailable", err);
-      return null;
-    }
-  }
-
-  async function startMicrophone() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      setLocalStream(stream);
-      return stream;
-    } catch (err) {
-      console.error("Microphone permission denied or unavailable", err);
-      return null;
-    }
-  }
-
-  function stopCamera() {
-    localStream?.getTracks().forEach((t) => t.stop());
-    setLocalStream(null);
-  }
-
-  function teardownCall() {
-    if (ringTimeoutRef.current) {
-      clearTimeout(ringTimeoutRef.current);
-      ringTimeoutRef.current = null;
-    }
-    pcRef.current?.close();
-    pcRef.current = null;
-    pendingIceRef.current = [];
-    setRemoteStream(null);
-    stopCamera();
-    setCallState({ kind: "idle" });
-    setCallMinimized(false);
-    setIsMuted(false);
-    setIsCameraOff(false);
-    setSpeakerOn(true);
-    setReconnecting(false);
-  }
-
-  // React to the WebRTC connection lifecycle so a call that can't connect
-  // (e.g. no TURN server across networks) doesn't hang on "Connecting…".
-  function onPeerState(state: RTCPeerConnectionState) {
-    if (state === "connected") {
-      setReconnecting(false);
-    } else if (state === "disconnected") {
-      setReconnecting(true);
-    } else if (state === "failed") {
-      setCallNotice("Call failed — couldn't connect");
-      teardownCall();
-    }
-  }
-
-  function toggleSpeaker() {
-    setSpeakerOn((v) => !v);
-  }
-
-  function toggleMute() {
-    if (!localStream) return;
-    const audioTracks = localStream.getAudioTracks();
-    const next = !isMuted;
-    audioTracks.forEach((t) => (t.enabled = !next));
-    setIsMuted(next);
-  }
-
-  function toggleCamera() {
-    if (!localStream) return;
-    const videoTracks = localStream.getVideoTracks();
-    const next = !isCameraOff;
-    videoTracks.forEach((t) => (t.enabled = !next));
-    setIsCameraOff(next);
-  }
-
-  async function flipCamera() {
-    if (!localStream) return;
-    const currentTrack = localStream.getVideoTracks()[0];
-    if (!currentTrack) return;
-    const settings = currentTrack.getSettings();
-    const newFacing = settings.facingMode === "environment" ? "user" : "environment";
-    try {
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { exact: newFacing } },
-        audio: false,
-      });
-      const newTrack = newStream.getVideoTracks()[0];
-      localStream.removeTrack(currentTrack);
-      localStream.addTrack(newTrack);
-      currentTrack.stop();
-      const pc = pcRef.current;
-      if (pc) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) await sender.replaceTrack(newTrack);
-      }
-      setLocalStream(new MediaStream([...localStream.getTracks()]));
-    } catch (err) {
-      console.error("Flip camera failed (device may only have one camera)", err);
-    }
-  }
-
-  async function startCall(mode: CallMode) {
-    if (!recipient || !wsRef.current) return;
-    if (callState.kind !== "idle") return;
-    setCallState({ kind: "outgoing", to: recipient, mode });
-
-    let stream = localStream;
-    if (!stream) {
-      stream = mode === "video" ? await startCamera() : await startMicrophone();
-      if (!stream) {
-        setCallState({ kind: "idle" });
-        return;
-      }
-    }
-
-    const pc = await createPeerConnection(wsRef.current, recipient, token, setRemoteStream, onPeerState);
-    pcRef.current = pc;
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    wsRef.current.send(JSON.stringify({ type: "call-offer", to: recipient, payload: offer, mode }));
-
-    // Give up ringing after 30s if the other side never answers.
-    ringTimeoutRef.current = setTimeout(() => {
-      wsRef.current?.send(JSON.stringify({ type: "call-end", to: recipient }));
-      setCallNotice(`${recipient} didn't answer`);
-      teardownCall();
-    }, 30_000);
-  }
-
-  async function acceptCall() {
-    if (callState.kind !== "incoming") return;
-    if (!wsRef.current) return;
-    const { from, offer, mode } = callState;
-
-    let stream = localStream;
-    if (!stream) {
-      stream = mode === "video" ? await startCamera() : await startMicrophone();
-      if (!stream) {
-        wsRef.current.send(JSON.stringify({ type: "call-end", to: from }));
-        setCallState({ kind: "idle" });
-        return;
-      }
-    }
-
-    const pc = await createPeerConnection(wsRef.current, from, token, setRemoteStream, onPeerState);
-    pcRef.current = pc;
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
-
-    await pc.setRemoteDescription(offer);
-    for (const c of pendingIceRef.current) {
-      try { await pc.addIceCandidate(c); } catch (e) { console.error("addIceCandidate", e); }
-    }
-    pendingIceRef.current = [];
-
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    wsRef.current.send(JSON.stringify({ type: "call-answer", to: from, payload: answer }));
-    setCallState({ kind: "active", peer: from, mode });
-  }
-
-  function rejectCall() {
-    if (callState.kind !== "incoming") return;
-    wsRef.current?.send(JSON.stringify({ type: "call-end", to: callState.from }));
-    setCallState({ kind: "idle" });
-  }
-
-  function hangUp() {
-    if (callState.kind === "outgoing" || callState.kind === "active") {
-      const peer = callState.kind === "outgoing" ? callState.to : callState.peer;
-      wsRef.current?.send(JSON.stringify({ type: "call-end", to: peer }));
-    }
-    teardownCall();
-  }
-
-  async function handleSignal(signal: CallSignal) {
-    if (signal.type === "call-offer") {
-      if (callState.kind !== "idle") {
-        wsRef.current?.send(JSON.stringify({ type: "call-end", to: signal.from }));
-        return;
-      }
-      // If we get an offer while sitting on the list view, jump into the chat with the caller
-      if (signal.from && signal.from !== recipient) {
-        selectRecipient(signal.from);
-      }
-      const mode: CallMode = (signal.type === "call-offer" && signal.mode) ? signal.mode : "video";
-      setCallState({ kind: "incoming", from: signal.from!, offer: signal.payload, mode });
-      return;
-    }
-    if (signal.type === "call-answer") {
-      const pc = pcRef.current;
-      if (!pc) return;
-      if (ringTimeoutRef.current) {
-        clearTimeout(ringTimeoutRef.current);
-        ringTimeoutRef.current = null;
-      }
-      await pc.setRemoteDescription(signal.payload);
-      for (const c of pendingIceRef.current) {
-        try { await pc.addIceCandidate(c); } catch (e) { console.error("addIceCandidate", e); }
-      }
-      pendingIceRef.current = [];
-      if (callState.kind === "outgoing") {
-        setCallState({ kind: "active", peer: callState.to, mode: callState.mode });
-      }
-      return;
-    }
-    if (signal.type === "call-ice") {
-      const pc = pcRef.current;
-      if (pc && pc.remoteDescription) {
-        // PC exists and remote description is set — add directly
-        try { await pc.addIceCandidate(signal.payload); } catch (e) { console.error("addIceCandidate", e); }
-      } else {
-        // Either: (a) PC hasn't been created yet (incoming call not yet
-        // accepted), or (b) remote description hasn't been set yet.
-        // Queue for later — acceptCall / call-answer handler will flush.
-        pendingIceRef.current.push(signal.payload);
-      }
-      return;
-    }
-    if (signal.type === "call-end") {
-      if (callState.kind === "outgoing") setCallNotice(`${callState.to} is busy or declined the call`);
-      else if (callState.kind === "incoming") setCallNotice(`${callState.from} canceled the call`);
-      else if (callState.kind === "active") setCallNotice(`${callState.peer} ended the call`);
-      teardownCall();
-      return;
-    }
-  }
-
-  // Keep the ref pointing at the latest closure of handleSignal
+  // Keep the long-lived socket handlers pointed at the current call controller.
   useEffect(() => {
-    handleSignalRef.current = handleSignal;
+    handleSignalRef.current = call.handleSignal;
+    callSocketOpenRef.current = call.onSocketOpen;
+    selectRecipientRef.current = selectRecipient;
   });
-
-  // Auto-dismiss the call notice
-  useEffect(() => {
-    if (!callNotice) return;
-    const id = setTimeout(() => setCallNotice(null), 4000);
-    return () => clearTimeout(id);
-  }, [callNotice]);
-
-  // Ring tones: ringback while we call out, ringtone while a call comes in,
-  // silence once the call connects or ends.
-  useEffect(() => {
-    if (callState.kind === "outgoing") playRingback();
-    else if (callState.kind === "incoming") playRingtone();
-    else stopTone();
-    return () => stopTone();
-  }, [callState.kind]);
-
-  // Single, persistent remote-audio sink. Living at the app level (not inside
-  // VideoCallScreen) means audio keeps playing when the call is minimized and
-  // works identically for voice and video calls — exactly one element ever
-  // plays the remote audio, so there's no echo.
-  useEffect(() => {
-    if (audioSinkRef.current) audioSinkRef.current.srcObject = remoteStream;
-  }, [remoteStream]);
-
-  useEffect(() => {
-    if (audioSinkRef.current) audioSinkRef.current.muted = !speakerOn;
-  }, [speakerOn]);
-
 
   // Page Visibility → push trigger
   useEffect(() => {
@@ -1098,13 +968,13 @@ function App() {
 
   async function handleAcceptRequest(id: number) {
     if (!token) return;
-    const res = await fetch(`${apiBase}/api/friends/requests/${id}/accept`, {
+    const res = await apiFetch(`${apiBase}/api/friends/requests/${id}/accept`, {
       method: "PUT", headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
       setFriendRequests(prev => prev.filter(r => r.id !== id));
       // refresh user list so the new friend appears
-      fetch(`${apiBase}/api/users`, { headers: { Authorization: `Bearer ${token}` } })
+      apiFetch(`${apiBase}/api/users`, { headers: { Authorization: `Bearer ${token}` } })
         .then(r => r.ok ? r.json() : [])
         .then(setUsers).catch(console.error);
     }
@@ -1112,15 +982,23 @@ function App() {
 
   async function handleRejectRequest(id: number) {
     if (!token) return;
-    const res = await fetch(`${apiBase}/api/friends/requests/${id}/reject`, {
+    const res = await apiFetch(`${apiBase}/api/friends/requests/${id}/reject`, {
       method: "PUT", headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) setFriendRequests(prev => prev.filter(r => r.id !== id));
   }
 
+  async function handleBlockRequest(id: number, username: string) {
+    if (!token) return;
+    const res = await fetch(`${apiBase}/api/blocks/${encodeURIComponent(username)}`, {
+      method: "POST", headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) setFriendRequests(prev => prev.filter(r => r.id !== id && r.fromUser !== username));
+  }
+
   async function handleSendRequest(shareId: string) {
     if (!token) return;
-    await fetch(`${apiBase}/api/friends/request`, {
+    await apiFetch(`${apiBase}/api/friends/request`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: JSON.stringify({ toShareId: shareId }),
@@ -1136,7 +1014,7 @@ function App() {
       const formData = new FormData();
       formData.append("file", file);
       
-      const res = await fetch(`${apiBase}/api/media/profile`, {
+      const res = await apiFetch(`${apiBase}/api/media/profile`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
@@ -1146,7 +1024,7 @@ function App() {
       avatarUrl = data.mediaId;
     }
 
-    const res2 = await fetch(`${apiBase}/api/users/profile`, {
+    const res2 = await apiFetch(`${apiBase}/api/users/profile`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1163,78 +1041,12 @@ function App() {
 
   return (
     <AppShell>
-      {/* Persistent remote-audio sink — the single source of call audio. */}
-      <audio ref={audioSinkRef} autoPlay className="hidden" />
-
-      {callNotice && <CallNoticeBanner message={callNotice} />}
-
-      {callState.kind === "incoming" && (
-        <IncomingCallModal
-          from={callState.from}
-          mode={callState.mode}
-          onAccept={acceptCall}
-          onReject={rejectCall}
-        />
-      )}
-
-      {(callState.kind === "outgoing" || callState.kind === "active") && !callMinimized && (
-        <VideoCallScreen
-          peer={callState.kind === "outgoing" ? callState.to : callState.peer}
-          callKind={callState.kind}
-          callMode={callState.mode}
-          localStream={localStream}
-          remoteStream={remoteStream}
-          reconnecting={reconnecting}
-          onHangUp={hangUp}
-          onMinimize={() => setCallMinimized(true)}
-          onToggleMute={toggleMute}
-          onToggleCamera={toggleCamera}
-          onToggleSpeaker={toggleSpeaker}
-          onFlipCamera={flipCamera}
-          isMuted={isMuted}
-          isCameraOff={isCameraOff}
-          speakerOn={speakerOn}
-        />
-      )}
-
-      {(callState.kind === "outgoing" || callState.kind === "active") && callMinimized && (
-        <div
-          className="fixed bottom-20 left-4 right-4 z-50 bg-[#0b0f14] rounded-2xl shadow-2xl flex items-center gap-3 px-4 py-3 border border-white/10"
-          onClick={() => setCallMinimized(false)}
-          style={{ cursor: "pointer" }}
-        >
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-base shrink-0"
-            style={{ background: "#3b82f6" }}
-          >
-            {(callState.kind === "outgoing" ? callState.to : callState.peer)[0]?.toUpperCase()}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-white text-sm font-semibold truncate">
-              {callState.kind === "outgoing" ? callState.to : callState.peer}
-            </p>
-            <p className="text-white/50 text-xs">
-              {callState.kind === "active" ? "Tap to return" : "Calling…"}
-            </p>
-          </div>
-          <button
-            onClick={e => { e.stopPropagation(); hangUp(); }}
-            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-            style={{ background: "#ef4444" }}
-            aria-label="End call"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" style={{ transform: "rotate(135deg)" }}>
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-            </svg>
-          </button>
-        </div>
-      )}
+      <CallLayer call={call} profileOf={(u) => users.find((x) => x.username === u)} />
 
       {view === "settings" && (
         <SettingsView
           me={me}
           meProfile={meProfile}
-          shareId={meProfile?.shareId}
           pushEnabled={pushEnabled}
           pushError={pushError}
           isBrave={isBrave}
@@ -1245,6 +1057,7 @@ function App() {
         >
           {me && (
             <>
+              {token && <PrivacySettings token={token} avatarUrl={meProfile?.avatarUrl} />}
               <BackupSettings me={me} token={token} onRestored={() => setHistoryVersion((v) => v + 1)} />
               <DevicesSettings me={me} token={token} currentDeviceId={signalDeviceId} />
             </>
@@ -1283,14 +1096,32 @@ function App() {
           onStartReply={setReplyTo}
           onCancelReply={() => setReplyTo(null)}
           callState={callState}
-          onStartVoiceCall={() => startCall("audio")}
-          onStartVideoCall={() => startCall("video")}
-          onHangUp={hangUp}
+          onStartVoiceCall={() => void call.startCall(recipient, "audio")}
+          onStartVideoCall={() => void call.startCall(recipient, "video")}
+          onHangUp={call.hangUp}
           onBack={() => navigate(-1)}
         />
       )}
 
-      {(view === "list" || (view === "chat" && !recipient)) && (
+      {view === "group" && openGroup && me && (
+        <GroupConversationView
+          key={openGroup.id}
+          group={openGroup}
+          me={me}
+          token={token}
+          friends={users}
+          getSignal={() => signalRef.current}
+          getSocket={() => wsRef.current}
+          onBack={() => navigate(-1)}
+          onLeft={() => {
+            setGroups((prev) => prev.filter((g) => g.id !== openGroup.id));
+            navigate("/", { replace: true });
+          }}
+          onGroupChanged={upsertGroup}
+        />
+      )}
+
+      {(view === "list" || (view === "chat" && !recipient) || (view === "group" && !openGroup)) && (
         <ChatListView
           me={me}
           users={users}
@@ -1301,6 +1132,57 @@ function App() {
           onAcceptRequest={handleAcceptRequest}
           onRejectRequest={handleRejectRequest}
           onSendRequest={handleSendRequest}
+          onAddByInvite={() => setAddInvite("")}
+          onBlockRequest={handleBlockRequest}
+          tab={listTab}
+          onTabChange={setListTab}
+          groupsPanel={
+            <GroupsPanel
+              me={me}
+              groups={groups}
+              previews={groupPreviews}
+              activeGroupId={openGroupId}
+              onOpen={(id) => navigate(`/group/${encodeURIComponent(id)}`)}
+              onCreate={() => setCreatingGroup(true)}
+            />
+          }
+        />
+      )}
+
+      {creatingGroup && (
+        <CreateGroupSheet
+          token={token}
+          friends={users}
+          onClose={() => setCreatingGroup(false)}
+          onCreated={(g) => {
+            setCreatingGroup(false);
+            upsertGroup(g);
+            navigate(`/group/${encodeURIComponent(g.id)}`);
+          }}
+        />
+      )}
+
+      {groupInvite && (
+        <JoinGroupPrompt
+          token={token}
+          inviteToken={groupInvite}
+          onClose={() => { setGroupInvite(null); navigate("/", { replace: true }); }}
+          onJoined={(g) => {
+            setGroupInvite(null);
+            upsertGroup(g);
+            setListTab("groups");
+            navigate(`/group/${encodeURIComponent(g.id)}`, { replace: true });
+          }}
+        />
+      )}
+
+      {addInvite !== null && token && (
+        <AddContactSheet
+          token={token}
+          initialCode={addInvite || undefined}
+          connected={users.map(u => u.username)}
+          onClose={() => setAddInvite(null)}
+          onOpenChat={username => { setAddInvite(null); selectRecipient(username); }}
         />
       )}
     </AppShell>

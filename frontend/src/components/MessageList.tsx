@@ -10,6 +10,8 @@ type Props = {
   onMarkSnapViewed: (key: string) => void; // key = sender|sentAt|mediaId — uniquely identifies a message
   onStartReply: (msg: ChatMessage) => void;
   peerReadAt?: number; // epoch ms the peer last read the conversation
+  // Groups: label each cluster from someone else with their name.
+  senderName?: (username: string) => string | null;
 };
 
 function formatTime(iso: string): string {
@@ -36,7 +38,7 @@ function formatDate(iso: string): string {
   }
 }
 
-export function MessageList({ messages, me, token, onMarkSnapViewed, onStartReply, peerReadAt = 0 }: Props) {
+export function MessageList({ messages, me, token, onMarkSnapViewed, onStartReply, peerReadAt = 0, senderName }: Props) {
   const messagesById = new Map<number, ChatMessage>();
   for (const m of messages) {
     if (m.id != null) messagesById.set(m.id, m);
@@ -57,10 +59,13 @@ export function MessageList({ messages, me, token, onMarkSnapViewed, onStartRepl
   }
 
   // Group consecutive messages from the same sender so the timestamp prints once per cluster.
-  const clusters: { from: string; items: ChatMessage[] }[] = [];
+  // System lines ("Alice added Bob") stand alone and break clusters.
+  const clusters: { from: string; items: ChatMessage[]; system?: boolean }[] = [];
   for (const msg of messages) {
     const last = clusters[clusters.length - 1];
-    if (last && last.from === msg.from) {
+    if (msg.system) {
+      clusters.push({ from: msg.from, items: [msg], system: true });
+    } else if (last && !last.system && last.from === msg.from) {
       last.items.push(msg);
     } else {
       clusters.push({ from: msg.from, items: [msg] });
@@ -85,10 +90,20 @@ export function MessageList({ messages, me, token, onMarkSnapViewed, onStartRepl
         )}
 
         {clusters.map((cluster, ci) => {
+          if (cluster.system) {
+            return (
+              <div key={ci} className="flex justify-center">
+                <span className="text-[11px] text-muted bg-muted-soft/30 px-3 py-1 rounded-full text-center max-w-[85%]">
+                  {cluster.items[0].content}
+                </span>
+              </div>
+            );
+          }
           const isOwn = cluster.from === me;
-          // const last = cluster.items[cluster.items.length - 1];
+          const label = !isOwn && senderName ? senderName(cluster.from) : null;
           return (
             <div key={ci} className="flex flex-col gap-1.5">
+              {label && <span className="text-[11px] font-semibold text-primary px-3 -mb-0.5">{label}</span>}
               {cluster.items.map((msg, mi) => (
                 <MessageBubble
                   key={mi}

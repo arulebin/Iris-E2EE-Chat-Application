@@ -49,6 +49,44 @@
   --iris-gradient: linear-gradient(135deg, #5b5bd6 0%, #7c5cff 55%, #9d7bff 100%);
 }
 
+/* ── Safe areas ───────────────────────────────────────────────────────────
+   The Android app (and installed PWAs) run edge-to-edge (viewport-fit=cover),
+   so content must clear the status bar / notch and the gesture bar. env() is 0
+   in an ordinary browser tab, so all of this is a no-op there.
+   ONE mechanism: #root is inset by the safe area (below), so every in-flow view
+   (chat list, conversation, settings, auth, unlock, splash) clears the bars —
+   views inside it must size with h-full/min-h-full, not dvh/screen units.
+   position:fixed overlays escape #root, so each one's root takes `safe-frame`
+   (absolutely positioned controls inside use the safe-top-* / safe-bottom-*
+   offsets, since padding doesn't move them). Bottom sheets pad inside the sheet
+   with `safe-pb-6` so no gap opens under them. */
+@utility safe-frame {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+@utility safe-top-4 {
+  top: calc(env(safe-area-inset-top) + 1rem);
+}
+@utility safe-top-5 {
+  top: calc(env(safe-area-inset-top) + 1.25rem);
+}
+@utility safe-bottom-8 {
+  bottom: calc(env(safe-area-inset-bottom) + 2rem);
+}
+@utility safe-bottom-28 {
+  bottom: calc(env(safe-area-inset-bottom) + 7rem);
+}
+@utility safe-pt {
+  padding-top: env(safe-area-inset-top);
+}
+@utility safe-pb-6 {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 1.5rem);
+}
+
+#root {
+  box-sizing: border-box;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
 html, body, #root {
   height: 100%;
   background: var(--color-bg);

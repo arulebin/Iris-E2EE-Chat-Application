@@ -15,7 +15,9 @@ public class Message {
     private String sender;
 
     // Allow empty content for media-only messages (caption is optional).
-    @Column(length=4000)
+    // TEXT: a legacy (v1) RSA-hybrid ciphertext of a long message overflows varchar(4000).
+    // Existing Postgres columns are widened by ColumnTypeMigrator.
+    @Column(columnDefinition = "TEXT")
     private String content;
 
     @Column(nullable = false, updatable = false)
@@ -54,6 +56,14 @@ public class Message {
     // Sending device for v2 messages — recipients need it to pick the session.
     private Integer senderDeviceId;
 
+    // Group messages: the group's id. `recipient` then holds GROUP_PREFIX + id — the
+    // column is NOT NULL in existing databases (ddl-auto=update never relaxes it), and
+    // the prefix can't collide with 1:1 history lookups by username.
+    @Column(length = 36)
+    private String groupId;
+
+    static final String GROUP_PREFIX = "group:";
+
     protected Message(){ }
 
     /** Metadata row for a v2 message; the content travels in per-device envelopes. */
@@ -62,6 +72,14 @@ public class Message {
         Message m = new Message(sender, recipient, "", null, null, mediaId, mimeType, viewOnce, replyToId);
         m.protocolVersion = 2;
         m.senderDeviceId = senderDeviceId;
+        return m;
+    }
+
+    /** Metadata row for a v2 group message: one row, fanned out as per-device envelopes. */
+    static Message v2Group(String sender, int senderDeviceId, String groupId,
+                           String mediaId, String mimeType, Long replyToId) {
+        Message m = v2(sender, senderDeviceId, GROUP_PREFIX + groupId, mediaId, mimeType, false, replyToId);
+        m.groupId = groupId;
         return m;
     }
 
@@ -98,4 +116,5 @@ public class Message {
     public void setReadAt(Instant readAt) { this.readAt = readAt; }
     public int getProtocolVersion() { return protocolVersion == null ? 1 : protocolVersion; }
     public Integer getSenderDeviceId() { return senderDeviceId; }
+    public String getGroupId() { return groupId; }
 }

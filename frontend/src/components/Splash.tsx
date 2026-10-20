@@ -4,7 +4,7 @@ import { IrisMark } from "./icons";
 // then the wordmark rises in. One orchestrated beat — nothing more.
 export function Splash() {
   return (
-    <div className="min-h-screen bg-bg flex flex-col items-center justify-center px-8">
+    <div className="min-h-full bg-bg flex flex-col items-center justify-center px-8">
       <div className="iris-breathe relative flex items-center justify-center w-44 h-44">
         <span className="absolute inset-0 rounded-full border border-primary/15" />
         <span className="absolute inset-5 rounded-full border border-primary/25" />

@@ -23,7 +23,7 @@ export function UnlockKeyView({ me, error, busy, onUnlock, onLogout }: Props) {
   }
 
   return (
-    <div className="relative min-h-dvh overflow-hidden bg-bg flex flex-col items-center justify-center px-6">
+    <div className="relative min-h-full overflow-hidden bg-bg flex flex-col items-center justify-center px-6">
       <div aria-hidden className="pointer-events-none absolute inset-x-0 top-0 flex justify-center">
         <div className="relative mt-[-22vh] w-[150vw] max-w-[640px] aspect-square">
           <span className="absolute inset-0 rounded-full border border-primary/10" />

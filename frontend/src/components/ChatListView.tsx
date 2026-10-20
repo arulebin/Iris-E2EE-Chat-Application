@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { getLegacyCache, getMessages as getV2Messages } from "../lib/messageStore";
 import { Avatar } from "./Avatar";
 import { apiBase } from "../lib/config";
+import { apiFetch } from "../lib/api";
 import type { UserProfile, FriendRequest, ChatMessage } from "../types";
 import {
   ChatBubbleIcon,
@@ -49,9 +50,16 @@ type Props = {
   onAcceptRequest: (id: number) => void;
   onRejectRequest: (id: number) => void;
   onSendRequest: (shareId: string) => Promise<void>;
+  /** Opens the invite-code / QR sheet (the only way to add private profiles). */
+  onAddByInvite?: () => void;
+  onBlockRequest?: (id: number, username: string) => void;
+  // Groups tab: content + controlled tab (lifted so it survives opening a group).
+  groupsPanel?: ReactNode;
+  tab?: Tab;
+  onTabChange?: (tab: Tab) => void;
 };
 
-type Tab = "messages" | "groups";
+export type Tab = "messages" | "groups";
 
 export function ChatListView({
   me,
@@ -63,8 +71,13 @@ export function ChatListView({
   onAcceptRequest,
   onRejectRequest,
   onSendRequest,
+  onAddByInvite,
+  onBlockRequest,
+  groupsPanel,
+  tab,
+  onTabChange,
 }: Props) {
-  const activeTab: Tab = "messages";
+  const activeTab: Tab = groupsPanel && tab === "groups" ? "groups" : "messages";
   const [showSearch, setShowSearch] = useState(false);
   const [showRequests, setShowRequests] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -129,7 +142,7 @@ export function ChatListView({
       setSearching(true);
       try {
         const token = localStorage.getItem("token");
-        const res = await fetch(`${apiBase}/api/users/search?q=${encodeURIComponent(q)}`, {
+        const res = await apiFetch(`${apiBase}/api/users/search?q=${encodeURIComponent(q)}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) setSearchResults(await res.json());
@@ -200,23 +213,29 @@ export function ChatListView({
       <div className="px-5 pb-3">
         <div className="bg-muted-soft/40 rounded-full p-1 flex">
           <button
+            onClick={() => onTabChange?.("messages")}
             className={`flex-1 py-2 text-sm font-bold rounded-full transition ${
               activeTab === "messages" ? "bg-primary text-white shadow" : "text-navy"
             }`}
+            aria-pressed={activeTab === "messages"}
           >
             Messages
           </button>
           <button
-            className="flex-1 py-2 text-sm font-bold rounded-full text-muted cursor-not-allowed"
-            disabled
-            title="Groups coming soon"
+            onClick={() => onTabChange?.("groups")}
+            disabled={!groupsPanel}
+            className={`flex-1 py-2 text-sm font-bold rounded-full transition ${
+              activeTab === "groups" ? "bg-primary text-white shadow" : groupsPanel ? "text-navy" : "text-muted cursor-not-allowed"
+            }`}
+            aria-pressed={activeTab === "groups"}
           >
             Groups
           </button>
         </div>
       </div>
 
-      {/* User list */}
+      {activeTab === "groups" ? groupsPanel : (
+      /* User list */
       <div className="flex-1 overflow-y-auto px-2">
         {users.length === 0 ? (
           <div className="flex-1 flex flex-col items-center justify-center px-8 py-20 text-center">
@@ -267,15 +286,16 @@ export function ChatListView({
           </ul>
         )}
       </div>
+      )}
 
       {/* FAB */}
-      <button
+      {activeTab === "messages" && <button
         onClick={() => setShowSearch(true)}
         className="iris-fill absolute bottom-6 right-6 sm:bottom-8 sm:right-8 w-14 h-14 text-white rounded-full shadow-lg flex items-center justify-center transition-transform active:scale-90"
         aria-label="New chat"
       >
         <NewChatIcon />
-      </button>
+      </button>}
 
       {/* ── Search / New Chat sheet ── */}
       {showSearch && (
@@ -296,6 +316,23 @@ export function ChatListView({
             />
           </header>
           <div className="flex-1 overflow-y-auto px-2 py-2">
+            {onAddByInvite && (
+              <button
+                onClick={() => { setShowSearch(false); onAddByInvite(); }}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-2xl hover:bg-card/60 text-left"
+              >
+                <span className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
+                    <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
+                    <rect x="3" y="14" width="7" height="7" rx="1" /><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3" />
+                  </svg>
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block font-bold text-navy text-sm">Add with invite code or QR</span>
+                  <span className="block text-xs text-muted">For people with private profiles</span>
+                </span>
+              </button>
+            )}
             {searching && (
               <p className="text-center text-muted text-sm py-8">Searching…</p>
             )}
@@ -363,6 +400,15 @@ export function ChatListView({
                       <p className="text-xs text-muted">Wants to connect</p>
                     </div>
                     <div className="flex gap-2">
+                      {onBlockRequest && (
+                        <button
+                          onClick={() => onBlockRequest(req.id, req.fromUser)}
+                          className="text-xs font-bold text-danger px-2 py-1.5 rounded-full"
+                          aria-label={`Block ${req.fromUser}`}
+                        >
+                          Block
+                        </button>
+                      )}
                       <button
                         onClick={() => onRejectRequest(req.id)}
                         className="text-xs font-bold text-muted bg-muted-soft/30 px-3 py-1.5 rounded-full"

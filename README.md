@@ -192,3 +192,7 @@ See [docs/android-push.md](docs/android-push.md) for Firebase Cloud Messaging se
 ## 📜 License
 Iris is free software, licensed under the [GNU General Public License v3.0](LICENSE) (GPL-3.0-only).
 It uses [`@privacyresearch/libsignal-protocol-typescript`](https://github.com/privacyresearch/libsignal-protocol-typescript), which is also GPL-3.0.
+
+## Group chats: known tradeoff
+
+Group messages are end-to-end encrypted per device (Signal sessions, one envelope per member device). In v1 the group name, avatar, and membership are stored on the server in plaintext so it can authorize membership and fan-out; message content, media keys and replies stay inside the encrypted payload.

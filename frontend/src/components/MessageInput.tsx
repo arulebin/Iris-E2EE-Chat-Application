@@ -1,17 +1,21 @@
 import { useRef, useState } from "react";
 import type { ChatMessage } from "../types";
 import { CameraCapture } from "./CameraCapture";
+import { MAX_MESSAGE_CHARS } from "../lib/limits";
 import { CameraIcon, ImageIcon, SendIcon, SmileIcon, TimerIcon, XIcon } from "./icons";
 
 type Props = {
   value: string;
   onChange: (v: string) => void;
-  onSend: () => void;
+  /** Rejects with a user-facing Error when the message couldn't be sent. */
+  onSend: () => Promise<void>;
   onSendMedia?: (file: File, viewOnce: boolean) => Promise<void>;
   disabled?: boolean;
   disabledHint?: string | null;
   replyTo: ChatMessage | null;
   onCancelReply: () => void;
+  // Groups have no view-once (one viewedAt can't mean "viewed once by everyone").
+  allowSnaps?: boolean;
 };
 
 export function MessageInput({
@@ -23,6 +27,7 @@ export function MessageInput({
   disabledHint,
   replyTo,
   onCancelReply,
+  allowSnaps = true,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -31,6 +36,17 @@ export function MessageInput({
   const [cameraOpen, setCameraOpen] = useState(false);
 
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+
+  // Text send: surface failures under the composer instead of failing silently.
+  async function submit() {
+    if (disabled) return;
+    setUploadError(null);
+    try {
+      await onSend();
+    } catch (err: unknown) {
+      setUploadError(err instanceof Error ? err.message : "Message couldn't be sent.");
+    }
+  }
 
   async function uploadFile(file: File) {
     if (!onSendMedia) return;
@@ -82,10 +98,10 @@ export function MessageInput({
       )}
 
       {pendingFiles.length > 0 && (
-        <div className="fixed inset-0 bg-black z-50 flex flex-col pt-4">
+        <div className="fixed inset-0 bg-black z-50 flex flex-col pt-4 safe-frame">
           <button
             onClick={() => setPendingFiles([])}
-            className="absolute top-4 right-4 text-white/80 hover:text-white p-2 z-10"
+            className="absolute safe-top-4 right-4 text-white/80 hover:text-white p-2 z-10"
             aria-label="Cancel"
           >
             <XIcon className="w-7 h-7" />
@@ -146,11 +162,17 @@ export function MessageInput({
             Snap mode — next photo or video will self-destruct after viewing
           </div>
         )}
+        {value.length >= MAX_MESSAGE_CHARS && (
+          <div className="mb-2 px-3 py-1.5 rounded-full bg-danger/10 text-danger text-xs font-medium" role="status">
+            Message limit reached ({MAX_MESSAGE_CHARS.toLocaleString()} characters) — send the rest separately
+          </div>
+        )}
         <div className="flex items-center gap-2 bg-card rounded-full px-4 py-2 shadow-sm">
           <input
             value={value}
+            maxLength={MAX_MESSAGE_CHARS}
             onChange={(e) => onChange(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !disabled && onSend()}
+            onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
             placeholder={uploading ? "Uploading…" : "Type here..."}
             disabled={disabled || uploading}
             className="flex-1 bg-transparent text-navy placeholder:text-muted text-[15px] focus:outline-none disabled:opacity-50"
@@ -163,7 +185,7 @@ export function MessageInput({
             className="hidden"
             onChange={handleFileInput}
           />
-          <button
+          {allowSnaps && <button
             type="button"
             onClick={() => setSnapMode((s) => !s)}
             className={`p-1 rounded-full transition ${
@@ -174,7 +196,7 @@ export function MessageInput({
             disabled={disabled || uploading || !onSendMedia}
           >
             <TimerIcon />
-          </button>
+          </button>}
           <button
             type="button"
             onClick={() => setCameraOpen(true)}
@@ -196,7 +218,7 @@ export function MessageInput({
           {value.trim() ? (
             <button
               type="button"
-              onClick={() => !disabled && onSend()}
+              onClick={() => void submit()}
               disabled={disabled}
               className="iris-fill -mr-1 w-9 h-9 rounded-full flex items-center justify-center shadow-sm transition-transform active:scale-90 disabled:opacity-50"
               aria-label="Send message"

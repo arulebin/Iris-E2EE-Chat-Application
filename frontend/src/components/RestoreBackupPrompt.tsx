@@ -32,13 +32,13 @@ export function RestoreBackupPrompt({ me, token, onDone }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 safe-pt">
       <form
         role="dialog"
         aria-modal="true"
         aria-labelledby="restore-title"
         onSubmit={restore}
-        className="bg-card w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-6 flex flex-col gap-3"
+        className="bg-card w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-6 safe-pb-6 flex flex-col gap-3"
       >
         <h2 id="restore-title" className="font-bold text-navy">Restore your messages?</h2>
         <p className="text-sm text-muted leading-snug">

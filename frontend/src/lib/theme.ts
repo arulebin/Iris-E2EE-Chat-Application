@@ -3,6 +3,8 @@
 // [data-theme="dark"]). A matching inline script in index.html applies the
 // same thing before first paint to avoid a flash.
 
+import { Capacitor, SystemBars, SystemBarsStyle } from "@capacitor/core";
+
 export type ThemePref = "system" | "light" | "dark";
 
 const KEY = "iris-theme";
@@ -23,6 +25,12 @@ export function resolveTheme(pref: ThemePref): "light" | "dark" {
 function applyResolved(theme: "light" | "dark") {
   document.documentElement.dataset.theme = theme;
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", BG[theme]);
+  // Android app: status/navigation bar icons must contrast with the app background
+  // (the app draws edge-to-edge behind them). Light theme → dark icons.
+  if (Capacitor.isNativePlatform()) {
+    SystemBars.setStyle({ style: theme === "dark" ? SystemBarsStyle.Dark : SystemBarsStyle.Light })
+      .catch(() => { /* older shells without SystemBars: keep the default */ });
+  }
 }
 
 export function setThemePref(pref: ThemePref) {

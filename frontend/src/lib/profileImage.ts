@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiBase } from "./config";
+import { apiFetch } from "./api";
 
 // Profile pictures require the JWT, so <img src> can't load them directly.
 // Fetch once per filename with the token and hand out a shared object URL.
@@ -8,7 +9,7 @@ const cache = new Map<string, Promise<string>>();
 function fetchProfileObjectURL(filename: string, token: string): Promise<string> {
   const hit = cache.get(filename);
   if (hit) return hit;
-  const promise = fetch(`${apiBase}/api/media/profile/${encodeURIComponent(filename)}`, {
+  const promise = apiFetch(`${apiBase}/api/media/profile/${encodeURIComponent(filename)}`, {
     headers: { Authorization: `Bearer ${token}` },
   }).then(async (res) => {
     if (!res.ok) throw new Error(`Profile image fetch failed: ${res.status}`);

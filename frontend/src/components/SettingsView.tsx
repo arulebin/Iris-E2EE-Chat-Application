@@ -1,10 +1,8 @@
 import { useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import { BackIcon, BellIcon, LogoutIcon } from "./icons";
 import { Avatar } from "./Avatar";
 import { AppLockSettings } from "./AppLockSettings";
 import { getThemePref, setThemePref, type ThemePref } from "../lib/theme";
-import { useProfileImage } from "../lib/profileImage";
 import {
   getScreenSecurityPref,
   screenSecuritySupported,
@@ -21,8 +19,7 @@ type Props = {
   onEnableNotifications: () => void;
   onLogout: () => void;
   onUpdateProfile: (name: string, file: File | null) => Promise<void>;
-  shareId?: string;
-  /** Extra self-contained sections (backup, devices), rendered above Log out. */
+  /** Extra self-contained sections (privacy, backup, devices), rendered above Log out. */
   children?: React.ReactNode;
 };
 
@@ -36,7 +33,6 @@ export function SettingsView({
   onEnableNotifications,
   onLogout,
   onUpdateProfile,
-  shareId,
   children,
 }: Props) {
   const [preferredName, setPreferredName] = useState(meProfile?.preferredName || "");
@@ -44,7 +40,6 @@ export function SettingsView({
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [themePref, setLocalTheme] = useState<ThemePref>(getThemePref());
-  const qrAvatarSrc = useProfileImage(meProfile?.avatarUrl);
 
   const [screenSecure, setScreenSecure] = useState(getScreenSecurityPref);
 
@@ -53,13 +48,6 @@ export function SettingsView({
     const next = !screenSecure;
     setScreenSecure(next);
     setScreenSecurityPref(next);
-  };
-
-  const inviteUrl = `${window.location.origin}/?add=${shareId ?? me}`;
-
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(inviteUrl);
-    alert("Invite link copied to clipboard!");
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -187,6 +175,7 @@ export function SettingsView({
           </section>
         )}
 
+<<<<<<< HEAD
         {me && <AppLockSettings me={me} />}
 
         <section>
@@ -216,6 +205,8 @@ export function SettingsView({
             </button>
           </div>
         </section>
+=======
+>>>>>>> security-hardening
 
         <section>
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">

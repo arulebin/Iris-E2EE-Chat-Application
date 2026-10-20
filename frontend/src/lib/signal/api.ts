@@ -1,4 +1,5 @@
 import { apiBase } from '../config'
+import { apiFetch } from '../api'
 
 // Thin wrappers over /api/signal/*. All keys are base64; the server only stores
 // public material (plus the identity private key wrapped under a password KEK).
@@ -30,7 +31,7 @@ export class HttpError extends Error {
 }
 
 async function call<T>(token: string, method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${apiBase}/api/signal${path}`, {
+  const res = await apiFetch(`${apiBase}/api/signal${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,

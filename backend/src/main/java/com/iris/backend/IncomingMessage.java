@@ -14,11 +14,16 @@ public record IncomingMessage(
         // ── v2 (Signal protocol) only ──
         Integer v,
         String clientId,                // sender-chosen id, echoed in the "sent"/"send-error" reply
-        List<Envelope> envelopes        // one ciphertext per target device
+        List<Envelope> envelopes,       // one ciphertext per target device
+        String groupId                  // set for group messages (then `to` is unused)
 ) {
     /** Defensive accessor — viewOnce may be omitted from older clients. */
     public boolean viewOnceFlag() {
         return viewOnce != null && viewOnce;
+    }
+
+    public boolean isGroup() {
+        return groupId != null && !groupId.isBlank();
     }
 
     public boolean isV2() {

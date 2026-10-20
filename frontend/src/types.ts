@@ -39,12 +39,18 @@ export type ChatMessage = {
   senderDeviceId?: number | null;
   // Client-only: local id for a v2 message until the server assigns `id`.
   clientId?: string | null;
+  // Group messages: the group's id (history is filed under the pseudo-peer `group:<id>`).
+  groupId?: string | null;
+  // Client-only: a system line ("Alice added Bob") rather than a chat message.
+  system?: boolean;
 };
 
 export type CallMode = 'audio' | 'video';
 
+// callId ties every signal to one call, so stray or stale signals (another caller
+// giving up, a previous call's late call-end) can't touch the current one.
 export type CallState =
   | { kind: 'idle' }
-  | { kind: 'outgoing'; to: string; mode: CallMode }
-  | { kind: 'incoming'; from: string; offer: RTCSessionDescriptionInit; mode: CallMode }
-  | { kind: 'active'; peer: string; mode: CallMode };
+  | { kind: 'outgoing'; to: string; mode: CallMode; callId: string }
+  | { kind: 'incoming'; from: string; offer: RTCSessionDescriptionInit; mode: CallMode; callId: string }
+  | { kind: 'active'; peer: string; mode: CallMode; callId: string; role: 'caller' | 'callee'; startedAt: number };

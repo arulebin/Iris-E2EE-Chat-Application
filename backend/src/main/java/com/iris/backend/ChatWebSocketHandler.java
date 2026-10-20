@@ -1,5 +1,8 @@
 package com.iris.backend;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -14,6 +17,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -23,8 +27,17 @@ import java.util.concurrent.CopyOnWriteArraySet;
 @Component
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(ChatWebSocketHandler.class);
+
     // Base64 of one Signal ciphertext. Text + media envelopes are far below this.
     private static final int MAX_ENVELOPE_CHARS = 256 * 1024;
+
+    // Clients that heartbeat ping every ~25 s. A session that has pinged before but
+    // goes quiet this long is half-open (NAT timeout, Doze, network switch): close it
+    // so presence goes offline and pushes are sent instead of written into the void.
+    static final long HEARTBEAT_TIMEOUT_MS = 75_000;
+    private static final String LAST_PING = "lastPingAt";
+    private static final String PING_FRAME = "{\"type\":\"ping\"}";
 
     private final MessageRepository messageRepository;
     private final ObjectMapper objectMapper;
@@ -33,9 +46,11 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private final FriendRequestRepository friendRequestRepository;
     private final SignalKeyService signalKeys;
     private final EnvelopeService envelopes;
+    private final GroupService groups;
 
     // username → that user's open sessions (could be multiple tabs/devices)
     private final Map<String, Set<WebSocketSession>> sessionsByUser = new ConcurrentHashMap<>();
+    private final CallRelay calls;
 
     public ChatWebSocketHandler(
             MessageRepository messageRepository,
@@ -44,7 +59,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             UserStatusService userStatusService,
             FriendRequestRepository friendRequestRepository,
             SignalKeyService signalKeys,
-            EnvelopeService envelopes
+            EnvelopeService envelopes,
+            GroupService groups
     ) {
         this.messageRepository = messageRepository;
         this.objectMapper = objectMapper;
@@ -53,12 +69,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         this.friendRequestRepository = friendRequestRepository;
         this.signalKeys = signalKeys;
         this.envelopes = envelopes;
+        this.calls = new CallRelay(objectMapper,
+            user -> sessionsByUser.getOrDefault(user, Set.of()),
+            this::isActive,
+            pushNotificationService);
+        this.groups = groups;
     }
 
     // Only accepted friends may message, call, or see each other's typing/read state.
     private boolean areFriends(String a, String b) {
         if (a == null || b == null || a.equals(b)) return false;
-        return friendRequestRepository.existsAcceptedBetween(a, b);
+        return friendRequestRepository.existsAcceptedUnblockedBetween(a, b);   // blocks cut everything
     }
 
     private static Integer deviceIdOf(WebSocketSession s) {
@@ -74,6 +95,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         userSessions.add(session);
         userStatusService.markOnline(username);
         if (userSessions.size() == 1) broadcastPresence(username, true);
+        calls.onConnect(session, username);
 
         if (Boolean.TRUE.equals(session.getAttributes().get("deviceRevoked"))) {
             session.sendMessage(new TextMessage("{\"type\":\"device-revoked\"}"));
@@ -86,6 +108,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         String username = (String) session.getAttributes().get("username");
+        calls.onClose(session, username);
         Set<WebSocketSession> userSessions = sessionsByUser.get(username);
         if (userSessions != null) {
             userSessions.remove(session);
@@ -98,7 +121,59 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage textMessage) throws Exception {
+    protected void handleTextMessage(WebSocketSession session, TextMessage textMessage) {
+        String payload = textMessage.getPayload();
+        // Heartbeats are a fixed frame, matched exactly so they skip JSON parsing.
+        if (PING_FRAME.equals(payload)) {
+            session.getAttributes().put(LAST_PING, System.currentTimeMillis());
+            send(session, "{\"type\":\"pong\"}");
+            return;
+        }
+        // One malformed or failing message must not take the socket down with it
+        // (an uncaught exception here closes the session with 1011).
+        try {
+            dispatch(session, textMessage);
+        } catch (Exception e) {
+            log.warn("WebSocket message from {} failed: {}", session.getAttributes().get("username"), e.toString());
+            String clientId = null;
+            try {
+                JsonNode root = objectMapper.readTree(payload);
+                if (root.hasNonNull("clientId")) clientId = root.get("clientId").asText();
+            } catch (Exception ignored) { /* unparseable */ }
+            ObjectNode err = objectMapper.createObjectNode();
+            err.put("type", "send-error");
+            if (clientId != null) err.put("clientId", clientId);
+            err.put("reason", "server-error");
+            send(session, err.toString());
+        }
+    }
+
+    private static void send(WebSocketSession session, String frame) {
+        try {
+            if (session.isOpen()) session.sendMessage(new TextMessage(frame));
+        } catch (IOException | IllegalStateException ignored) {
+            // closing / concurrent send — the client's heartbeat will notice
+        }
+    }
+
+    @Scheduled(fixedDelay = 30_000, initialDelay = 30_000)
+    void closeSilentSessions() {
+        long cutoff = System.currentTimeMillis() - HEARTBEAT_TIMEOUT_MS;
+        for (Set<WebSocketSession> userSessions : sessionsByUser.values()) {
+            for (WebSocketSession s : userSessions) {
+                // Only sessions that heartbeat are judged; older clients never ping.
+                Long last = (Long) s.getAttributes().get(LAST_PING);
+                if (last == null || last >= cutoff) continue;
+                try {
+                    s.close(CloseStatus.SESSION_NOT_RELIABLE);
+                } catch (IOException e) {
+                    // afterConnectionClosed still runs and cleans up
+                }
+            }
+        }
+    }
+
+    private void dispatch(WebSocketSession session, TextMessage textMessage) throws Exception {
         String sender = (String) session.getAttributes().get("username");
 
         JsonNode root = objectMapper.readTree(textMessage.getPayload());
@@ -139,6 +214,32 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
+        if ("typing".equals(type) && root.hasNonNull("group")) {
+            String groupId = root.get("group").asText();
+            if (!groups.isMember(groupId, sender)) return;
+            ObjectNode forwarded = objectMapper.createObjectNode();
+            forwarded.put("type", "typing");
+            forwarded.put("from", sender);
+            forwarded.put("group", groupId);
+            forwarded.put("state", root.has("state") ? root.get("state").asText() : "start");
+            sendToGroup(groupId, sender, forwarded.toString());
+            return;
+        }
+
+        if ("read".equals(type) && root.hasNonNull("group")) {
+            // sender has the group open; members' "seen by" state is metadata the server keeps
+            String groupId = root.get("group").asText();
+            Instant at = groups.markRead(groupId, sender);
+            if (at == null) return;
+            ObjectNode receipt = objectMapper.createObjectNode();
+            receipt.put("type", "group-read");
+            receipt.put("group", groupId);
+            receipt.put("by", sender);
+            receipt.put("at", at.toString());
+            sendToGroup(groupId, sender, receipt.toString());
+            return;
+        }
+
         if ("typing".equals(type)) {
             if (!root.has("to")) return;
             String to = root.get("to").asText();
@@ -170,21 +271,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             if (!root.has("to")) return;
             String to = root.get("to").asText();
             if (!areFriends(sender, to)) return;
-            ObjectNode forwarded = ((ObjectNode) root).put("from", sender);
-            if ("call-offer".equals(type)) {
-                sendToOneSession(to, forwarded.toString());
-                if (!isActive(to)) {
-                    // Generic text: push payloads pass through the browser vendor's push service.
-                    pushNotificationService.sendToUser(to, "Iris", "Incoming call", true);
-                }
-            } else {
-                sendToUser(to, forwarded.toString());
-            }
+            calls.handle(session, sender, to, (ObjectNode) root);
             return;
         }
 
         // ── chat message ──
         IncomingMessage incoming = objectMapper.treeToValue(root, IncomingMessage.class);
+
+        if (incoming.isGroup()) {
+            handleGroupV2(session, sender, incoming);
+            return;
+        }
 
         if (incoming.to() == null || incoming.to().isBlank()) return;
         if (!areFriends(sender, incoming.to())) return;
@@ -282,6 +379,78 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         if (!isActive(incoming.to())) {
             pushNotificationService.sendToUser(incoming.to(), "Iris", "New message");
+        }
+    }
+
+    /**
+     * Group message (Signal protocol only): the sender encrypts once per device of
+     * every member — Sesame-lite fan-out over the whole membership. The server checks
+     * the sender is a member and that the envelope set covers exactly the members'
+     * current devices, so a removed member never gets a copy.
+     */
+    private void handleGroupV2(WebSocketSession session, String sender, IncomingMessage incoming) throws IOException {
+        String clientId = incoming.clientId();
+        String groupId = incoming.groupId();
+        Integer senderDeviceId = deviceIdOf(session);
+        if (!incoming.isV2() || senderDeviceId == null) {
+            sendError(session, clientId, "no-device", null);
+            return;
+        }
+        if (!groups.isMember(groupId, sender)) {
+            sendError(session, clientId, "not-a-member", null);
+            return;
+        }
+        if (incoming.viewOnceFlag()) {
+            // One viewedAt per message can't express "viewed once by each member".
+            sendError(session, clientId, "no-snaps-in-groups", null);
+            return;
+        }
+        List<IncomingMessage.Envelope> provided = incoming.envelopes() == null ? List.of() : incoming.envelopes();
+        for (IncomingMessage.Envelope e : provided) {
+            if (e.user() == null || e.deviceId() == null || e.body() == null || e.body().length() > MAX_ENVELOPE_CHARS
+                    || e.type() == null || (e.type() != 1 && e.type() != 3)) {
+                sendError(session, clientId, "bad-envelope", null);
+                return;
+            }
+        }
+
+        List<String> members = groups.memberNames(groupId);
+        Map<String, List<Integer>> devicesByMember = new LinkedHashMap<>();
+        for (String m : members) devicesByMember.put(m, signalKeys.deviceIds(m));
+        Set<EnvelopeFanout.Address> expected = EnvelopeFanout.expectedGroupTargets(sender, senderDeviceId, devicesByMember);
+        EnvelopeFanout.Result fanout = EnvelopeFanout.check(expected,
+            provided.stream().map(e -> new EnvelopeFanout.Address(e.user(), e.deviceId())).toList());
+        if (!fanout.ok()) {
+            sendError(session, clientId, "device-mismatch", fanout);
+            return;
+        }
+
+        boolean hasMedia = incoming.mediaId() != null && !incoming.mediaId().isBlank();
+        EnvelopeService.Stored stored = envelopes.saveV2(
+            Message.v2Group(sender, senderDeviceId, groupId,
+                hasMedia ? incoming.mediaId() : null,
+                hasMedia ? incoming.mimeType() : null,
+                incoming.replyToId()),
+            provided);
+
+        for (MessageEnvelope env : stored.envelopes()) {
+            sendToDevice(env.getTargetUser(), env.getTargetDeviceId(), envelopeFrame(env, stored.message()));
+        }
+
+        ObjectNode sent = objectMapper.createObjectNode();
+        sent.put("type", "sent");
+        sent.put("clientId", clientId);
+        sent.set("message", objectMapper.valueToTree(toOutgoing(stored.message())));
+        session.sendMessage(new TextMessage(sent.toString()));
+
+        for (String m : members) {
+            if (!m.equals(sender) && !isActive(m)) pushNotificationService.sendToUser(m, "Iris", "New message");
+        }
+    }
+
+    private void sendToGroup(String groupId, String except, String payload) throws IOException {
+        for (String m : groups.memberNames(groupId)) {
+            if (!m.equals(except)) sendToUser(m, payload);
         }
     }
 
@@ -397,13 +566,4 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    private void sendToOneSession(String username, String payload) throws IOException {
-        Set<WebSocketSession> userSessions = sessionsByUser.get(username);
-        if (userSessions == null) return;
-        WebSocketSession latest = null;
-        for (WebSocketSession s : userSessions) {
-            if (s.isOpen()) latest = s;
-        }
-        if (latest != null) latest.sendMessage(new TextMessage(payload));
-    }
 }

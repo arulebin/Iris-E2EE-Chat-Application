@@ -11,7 +11,8 @@ import java.util.Map;
 
 /**
  * Signal-protocol key directory. Everything a stranger could use to drain prekeys
- * or enumerate devices is limited to the account itself and its accepted friends.
+ * or enumerate devices is limited to the account itself, its accepted friends, and
+ * the people it shares a group with.
  */
 @RestController
 @RequestMapping("/api/signal")
@@ -21,17 +22,25 @@ public class SignalController {
     private final UserRepository userRepository;
     private final FriendRequestRepository friendRequestRepository;
     private final ChatWebSocketHandler chatHandler;
+    private final SessionService sessionService;
+    private final GroupService groups;
 
     public SignalController(SignalKeyService keys, UserRepository userRepository,
-                            FriendRequestRepository friendRequestRepository, ChatWebSocketHandler chatHandler) {
+                            FriendRequestRepository friendRequestRepository, ChatWebSocketHandler chatHandler,
+                            SessionService sessionService, GroupService groups) {
         this.keys = keys;
         this.userRepository = userRepository;
         this.friendRequestRepository = friendRequestRepository;
         this.chatHandler = chatHandler;
+        this.sessionService = sessionService;
+        this.groups = groups;
     }
 
+    // Friends, plus anyone you share a group with: group messages are fanned out to
+    // every member's devices, so members need sessions even if they aren't friends.
     private boolean canSee(String me, String other) {
-        return me.equals(other) || friendRequestRepository.existsAcceptedBetween(me, other);
+        return me.equals(other) || friendRequestRepository.existsAcceptedBetween(me, other)
+            || groups.shareAGroup(me, other);
     }
 
     private static ResponseEntity<Object> bad(IllegalArgumentException e) {
@@ -102,6 +111,9 @@ public class SignalController {
     public ResponseEntity<Void> removeDevice(@PathVariable int deviceId, Authentication auth) {
         if (!keys.removeDevice(auth.getName(), deviceId)) return ResponseEntity.notFound().build();
         chatHandler.revokeDevice(auth.getName(), deviceId);
+        // Its refresh tokens die with it: the removed device is logged out once its
+        // current access token (≤ 1 h) expires.
+        sessionService.revokeDevice(auth.getName(), deviceId);
         return ResponseEntity.noContent().build();
     }
 

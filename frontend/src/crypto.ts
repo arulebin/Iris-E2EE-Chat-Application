@@ -1,5 +1,6 @@
 import { get, set } from 'idb-keyval'
 import { apiBase } from './lib/config'
+import { apiFetch, setSession } from './lib/api'
 
 
 const PBKDF2_ITERATIONS = 600_000 
@@ -151,7 +152,7 @@ const privDbKeyFor = (username: string) => `iris-private-key-${username}`
 const pubDbKeyFor  = (username: string) => `iris-public-key-${username}`
 
 async function fetchMyKeys(token: string): Promise<ServerKeys> {
-  const res = await fetch(`${apiBase}/api/keys/me`, {
+  const res = await apiFetch(`${apiBase}/api/keys/me`, {
     headers: { Authorization: `Bearer ${token}` },
   })
   if (!res.ok) throw new Error(`Failed to fetch own keys: ${res.status}`)
@@ -251,7 +252,7 @@ export async function ensureKeyPair(username: string, master: CryptoKey | null, 
   const kek = await deriveKek(master, base64ToUint8(keySalt))
   const encryptedPrivateKey = await wrapPrivateJwk(JSON.stringify(privateJwk), kek)
 
-  const res = await fetch(`${apiBase}/api/keys`, {
+  const res = await apiFetch(`${apiBase}/api/keys`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({
@@ -347,7 +348,7 @@ export async function upgradeLegacyAccount(username: string, password: string, t
     }
   }
 
-  const res = await fetch(`${apiBase}/api/credentials/upgrade`, {
+  const res = await apiFetch(`${apiBase}/api/credentials/upgrade`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ currentPassword: password, authKey, authSalt, ...rewrapped }),
@@ -368,6 +369,13 @@ export async function upgradeLegacyAccount(username: string, password: string, t
   }
   if (!res.ok) throw new Error(`Account upgrade failed: ${res.status}`)
 
+  // The upgrade ends every other login of the account; this device gets a fresh pair
+  // so it isn't logged out by its own action. (Older servers return an empty body.)
+  try {
+    const data = (await res.json()) as { token?: string; refreshToken?: string }
+    if (data.token && data.refreshToken) setSession(data.token, data.refreshToken)
+  } catch { /* no body: keep the current session */ }
+
   markUpgraded(username)
   return master
 }
@@ -376,7 +384,7 @@ export async function upgradeLegacyAccount(username: string, password: string, t
  * Fetch and import another user's public key.
  */
 export async function fetchPublicKey(username: string, token: string): Promise<CryptoKey> {
-  const res = await fetch(`${apiBase}/api/keys/${encodeURIComponent(username)}`, {
+  const res = await apiFetch(`${apiBase}/api/keys/${encodeURIComponent(username)}`, {
     headers: { Authorization: `Bearer ${token}` }
   })
   if (!res.ok) throw new Error(`Failed to fetch public key for ${username}: ${res.status}`)

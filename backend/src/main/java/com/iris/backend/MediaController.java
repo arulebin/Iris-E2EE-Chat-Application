@@ -3,6 +3,8 @@ package com.iris.backend;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -15,6 +17,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -44,12 +47,14 @@ public class MediaController {
 
     private final MediaEncryption encryption;
     private final MessageRepository messageRepository;
+    private final GroupService groupService;
 
     private Path storageDir;
 
-    public MediaController(MediaEncryption encryption, MessageRepository messageRepository) {
+    public MediaController(MediaEncryption encryption, MessageRepository messageRepository, GroupService groupService) {
         this.encryption = encryption;
         this.messageRepository = messageRepository;
+        this.groupService = groupService;
     }
 
     @PostConstruct
@@ -76,10 +81,12 @@ public class MediaController {
 
         // Current clients encrypt in the browser and upload opaque ciphertext. We store
         // it byte-for-byte as <id>.e2e — the server never holds the key or the plaintext.
+        // Streamed from the multipart temp file straight to disk: a 50 MB upload must not
+        // occupy 50 MB of a small heap.
         if (mimeType.startsWith("application/octet-stream")) {
-            byte[] ciphertext = file.getBytes();
-            Files.write(storageDir.resolve(mediaId + E2E_EXT), ciphertext);
-            return ResponseEntity.ok(new UploadResponse(mediaId, mimeType, ciphertext.length));
+            long size = file.getSize();
+            file.transferTo(storageDir.resolve(mediaId + E2E_EXT));
+            return ResponseEntity.ok(new UploadResponse(mediaId, mimeType, size));
         }
 
         // LEGACY: a stale (pre-E2E) client still uploading a plaintext image/video.
@@ -132,7 +139,11 @@ public class MediaController {
 
         String me = auth.getName();
         boolean isSender = me.equals(msg.getSender());
-        boolean isRecipient = me.equals(msg.getRecipient());
+        // Group media: every current member is a recipient (the blob is E2E-encrypted;
+        // its key only travels inside the members' envelopes).
+        boolean isRecipient = msg.getGroupId() != null
+            ? !isSender && groupService.isMember(msg.getGroupId(), me)
+            : me.equals(msg.getRecipient());
         if (!isSender && !isRecipient) {
             return ResponseEntity.status(403).build();
         }
@@ -152,29 +163,45 @@ public class MediaController {
         Path file = isE2e ? e2eFile : storageDir.resolve(mediaId + LEGACY_EXT);
         if (!Files.exists(file)) return ResponseEntity.notFound().build();
 
-        byte[] stored = Files.readAllBytes(file);
-        byte[] body = isE2e ? stored : encryption.decrypt(stored);
-
-        if (msg.isViewOnce() && isRecipient && msg.getViewedAt() == null) {
+        boolean consumeOnce = msg.isViewOnce() && isRecipient && msg.getViewedAt() == null;
+        if (consumeOnce) {
             msg.setViewedAt(Instant.now());
             messageRepository.save(msg);
+        }
+
+        String cache = msg.isViewOnce() ? "no-store" : "private, max-age=3600";
+
+        // E2E ciphertext is streamed from disk (never held in the heap). A view-once
+        // file is opened DELETE_ON_CLOSE, so it disappears as soon as it's been sent.
+        if (isE2e) {
+            long size = Files.size(file);
+            Resource resource = consumeOnce
+                    ? new InputStreamResource(Files.newInputStream(file, StandardOpenOption.DELETE_ON_CLOSE))
+                    : new FileSystemResource(file);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                    .contentLength(size)
+                    .header(HttpHeaders.CACHE_CONTROL, cache)
+                    .body(resource);
+        }
+
+        // LEGACY .bin: decrypted with the server key, so it has to pass through memory.
+        byte[] body = encryption.decrypt(Files.readAllBytes(file));
+        if (consumeOnce) {
             try {
                 Files.deleteIfExists(file);
             } catch (IOException e) {
             }
         }
 
-        // The client relies on octet-stream meaning "ciphertext — decrypt me".
-        MediaType type = MediaType.APPLICATION_OCTET_STREAM;
-        if (!isE2e) {
-            try {
-                type = MediaType.parseMediaType(msg.getMimeType());
-            } catch (Exception e) {
-                type = MediaType.APPLICATION_OCTET_STREAM;
-            }
+        // The client relies on octet-stream meaning "ciphertext — decrypt me", so a
+        // legacy (already decrypted) body carries its real type.
+        MediaType type;
+        try {
+            type = MediaType.parseMediaType(msg.getMimeType());
+        } catch (Exception e) {
+            type = MediaType.APPLICATION_OCTET_STREAM;
         }
-
-        String cache = msg.isViewOnce() ? "no-store" : "private, max-age=3600";
 
         return ResponseEntity.ok()
                 .contentType(type)
@@ -194,16 +221,14 @@ public class MediaController {
         Path file = storageDir.resolve(filename).normalize();
         if (!file.startsWith(storageDir) || !Files.exists(file)) return ResponseEntity.notFound().build();
 
-        byte[] plaintext = Files.readAllBytes(file);
-
         String mimeType = m.group(1).equals("jpg") ? "image/jpeg" : "image/" + m.group(1);
 
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(mimeType))
-                .contentLength(plaintext.length)
+                .contentLength(Files.size(file))
                 .header(HttpHeaders.CACHE_CONTROL, "private, max-age=86400")
                 .header("X-Content-Type-Options", "nosniff")
-                .body(new ByteArrayResource(plaintext));
+                .body(new FileSystemResource(file));
     }
 
     public record UploadResponse(String mediaId, String mimeType, long size) {}

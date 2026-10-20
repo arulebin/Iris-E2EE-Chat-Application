@@ -17,7 +17,8 @@ public record OutgoingMessage(
         Long replyToId,
         Instant readAt,
         int v,                  // 1 = legacy RSA, 2 = Signal protocol (content arrives in an envelope)
-        Integer senderDeviceId
+        Integer senderDeviceId,
+        String groupId          // non-null for group messages
 ) {
     static OutgoingMessage of(Message m) {
         return new OutgoingMessage(
@@ -30,7 +31,8 @@ public record OutgoingMessage(
             m.getReplyToId(),
             m.getReadAt(),
             m.getProtocolVersion(),
-            m.getSenderDeviceId()
+            m.getSenderDeviceId(),
+            m.getGroupId()
         );
     }
 }
