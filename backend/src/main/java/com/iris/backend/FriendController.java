@@ -6,6 +6,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -19,15 +21,21 @@ public class FriendController {
     private final UserRepository userRepository;
     private final PushNotificationService pushService;
     private final ChatWebSocketHandler chatHandler;
+    private final PrivacyService privacy;
+    private final InviteRateLimiter limiter;
 
     public FriendController(FriendRequestRepository friendRepository,
                             UserRepository userRepository,
                             PushNotificationService pushService,
-                            ChatWebSocketHandler chatHandler) {
+                            ChatWebSocketHandler chatHandler,
+                            PrivacyService privacy,
+                            InviteRateLimiter limiter) {
         this.friendRepository = friendRepository;
         this.userRepository   = userRepository;
         this.pushService      = pushService;
         this.chatHandler      = chatHandler;
+        this.privacy          = privacy;
+        this.limiter          = limiter;
     }
 
     // Push text stays generic (no usernames leave via FCM/Web Push); open clients
@@ -44,7 +52,9 @@ public class FriendController {
     }
 
     public record FriendRequestDto(Long id, String fromUser, String toUser, String status, Instant createdAt) {}
-    public record SendRequestBody(String toShareId) {}
+    // Exactly one target: toInviteCode (works for private profiles) or toShareId
+    // (search results; discoverable profiles only).
+    public record SendRequestBody(String toShareId, String toInviteCode) {}
 
     private FriendRequestDto toDto(FriendRequest fr) {
         return new FriendRequestDto(fr.getId(), fr.getFromUser(), fr.getToUser(),
@@ -52,14 +62,33 @@ public class FriendController {
     }
 
     @PostMapping("/request")
-    public ResponseEntity<?> sendRequest(@RequestBody SendRequestBody body, Authentication auth) {
+    public ResponseEntity<?> sendRequest(@RequestBody SendRequestBody body, Authentication auth,
+                                         HttpServletRequest http) {
         String me = auth.getName();
-        User target = userRepository.findByShareId(body.toShareId())
+        java.util.Optional<User> found;
+        if (body.toInviteCode() != null) {
+            if (!limiter.tryAcquire(me, http)) {
+                throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Too many attempts, try again later");
+            }
+            found = privacy.byInviteCode(body.toInviteCode());
+        } else if (body.toShareId() != null) {
+            found = privacy.byShareId(body.toShareId());
+        } else {
+            found = java.util.Optional.empty();
+        }
+        User target = found
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
         String them = target.getUsername();
 
         if (them.equals(me)) {
             return ResponseEntity.badRequest().body(Map.of("error", "Cannot send request to yourself"));
+        }
+        if (privacy.haveBlocked(me, them)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "Unblock this person first"));
+        }
+        // They blocked me: answer exactly like a sent request so the block isn't revealed.
+        if (privacy.haveBlocked(them, me)) {
+            return ResponseEntity.ok(Map.of("message", "Request sent"));
         }
 
         // Look at any existing relationship in both directions. The unique
@@ -105,8 +134,11 @@ public class FriendController {
 
     @GetMapping("/requests/incoming")
     public List<FriendRequestDto> incomingRequests(Authentication auth) {
-        return friendRepository.findByToUserAndStatus(auth.getName(), FriendRequest.Status.PENDING)
-                .stream().map(this::toDto).toList();
+        String me = auth.getName();
+        return friendRepository.findByToUserAndStatus(me, FriendRequest.Status.PENDING)
+                .stream()
+                .filter(fr -> !privacy.isBlockedEitherWay(me, fr.getFromUser()))
+                .map(this::toDto).toList();
     }
 
     @PutMapping("/requests/{id}/accept")
@@ -138,7 +170,8 @@ public class FriendController {
         String me = auth.getName();
         return friendRepository.findAcceptedByUser(me).stream()
                 .map(fr -> fr.getFromUser().equals(me) ? fr.getToUser() : fr.getFromUser())
-                .map(username -> userRepository.findByUsername(username).map(UserProfileDto::from).orElse(null))
+                .filter(username -> !privacy.haveBlocked(me, username))
+                .map(username -> userRepository.findByUsername(username).map(u -> privacy.profileFor(me, u)).orElse(null))
                 .filter(Objects::nonNull)
                 .toList();
     }

@@ -1,9 +1,7 @@
 import { useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
 import { BackIcon, BellIcon, LogoutIcon } from "./icons";
 import { Avatar } from "./Avatar";
 import { getThemePref, setThemePref, type ThemePref } from "../lib/theme";
-import { useProfileImage } from "../lib/profileImage";
 import {
   getScreenSecurityPref,
   screenSecuritySupported,
@@ -20,8 +18,7 @@ type Props = {
   onEnableNotifications: () => void;
   onLogout: () => void;
   onUpdateProfile: (name: string, file: File | null) => Promise<void>;
-  shareId?: string;
-  /** Extra self-contained sections (backup, devices), rendered above Log out. */
+  /** Extra self-contained sections (privacy, backup, devices), rendered above Log out. */
   children?: React.ReactNode;
 };
 
@@ -35,7 +32,6 @@ export function SettingsView({
   onEnableNotifications,
   onLogout,
   onUpdateProfile,
-  shareId,
   children,
 }: Props) {
   const [preferredName, setPreferredName] = useState(meProfile?.preferredName || "");
@@ -43,7 +39,6 @@ export function SettingsView({
   const [filePreview, setFilePreview] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [themePref, setLocalTheme] = useState<ThemePref>(getThemePref());
-  const qrAvatarSrc = useProfileImage(meProfile?.avatarUrl);
 
   const [screenSecure, setScreenSecure] = useState(getScreenSecurityPref);
 
@@ -52,13 +47,6 @@ export function SettingsView({
     const next = !screenSecure;
     setScreenSecure(next);
     setScreenSecurityPref(next);
-  };
-
-  const inviteUrl = `${window.location.origin}/?add=${shareId ?? me}`;
-
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(inviteUrl);
-    alert("Invite link copied to clipboard!");
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -186,33 +174,6 @@ export function SettingsView({
           </section>
         )}
 
-        <section>
-          <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
-            Share Profile
-          </p>
-          <div className="bg-card rounded-2xl flex flex-col items-center p-6 shadow-sm dark:border dark:border-muted-soft gap-4">
-            <div className="bg-white p-2 rounded-xl shadow-sm border border-muted-soft">
-              <QRCodeSVG 
-                value={inviteUrl} 
-                size={180} 
-                fgColor="#5b5bd6"
-                imageSettings={qrAvatarSrc ? {
-                  src: qrAvatarSrc,
-                  height: 48,
-                  width: 48,
-                  excavate: true
-                } : undefined}
-              />
-            </div>
-            <p className="text-sm text-center text-muted">Have friends scan this code or use your link to add you.</p>
-            <button 
-              onClick={handleCopyLink}
-              className="w-full bg-primary text-white font-bold py-2 rounded-xl hover:bg-primary/90"
-            >
-              Copy Invite Link
-            </button>
-          </div>
-        </section>
 
         <section>
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">
