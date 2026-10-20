@@ -20,7 +20,8 @@ public class PushController {
         this.fcmTokens = fcmTokens;
     }
 
-    public record FcmTokenRequest(String token) {}
+    /** `app` is optional: absent = a client from before the field existed (legacy notification behaviour). */
+    public record FcmTokenRequest(String token, String app) {}
 
     /**
      * Android app registers its FCM token. Idempotent; if the device was last
@@ -36,8 +37,16 @@ public class PushController {
         FcmToken row = fcmTokens.findByToken(req.token())
                 .orElseGet(() -> new FcmToken(username, req.token()));
         row.setUsername(username);
+        row.setApp(sanitizeApp(req.app()));
         fcmTokens.save(row);
         return ResponseEntity.ok().build();
+    }
+
+    /** Keep only a plausible application id; anything else is treated as "unknown / legacy". */
+    static String sanitizeApp(String app) {
+        if (app == null) return null;
+        String a = app.trim();
+        return a.matches("[A-Za-z0-9._-]{1,128}") ? a : null;
     }
 
     /** Called on logout. Only the token's owner may remove it. */

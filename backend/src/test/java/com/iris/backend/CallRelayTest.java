@@ -135,11 +135,38 @@ class CallRelayTest {
     void offlineCalleeIsPushedAndGetsTheOfferWhenItConnects() throws Exception {
         WebSocketSession alice = device("alice");
         relay.handle(alice, "alice", "bob", frame("call-offer", "bob", "c1"));
-        verify(push).sendToUser(eq("bob"), anyString(), eq("Incoming call"), anyBoolean());
+        verify(push).sendIncomingCall("bob", "c1", "video");
 
         WebSocketSession bob = device("bob");
         relay.onConnect(bob, "bob");
         assertEquals(List.of("call-offer"), types(bob));
+    }
+
+    @Test
+    void incomingCallPushCarriesTheCallModeAndNoNames() throws Exception {
+        WebSocketSession alice = device("alice");
+        ObjectNode offer = frame("call-offer", "bob", "c7");
+        offer.put("mode", "audio");
+        relay.handle(alice, "alice", "bob", offer);
+        verify(push).sendIncomingCall("bob", "c7", "audio");
+        verify(push, never()).sendToUser(anyString(), anyString(), anyString(), anyBoolean());
+    }
+
+    @Test
+    void callerCancellingWhileCalleeHasNoSocketSendsCallCancelled() throws Exception {
+        WebSocketSession alice = device("alice");
+        relay.handle(alice, "alice", "bob", frame("call-offer", "bob", "c1"));
+        relay.handle(alice, "alice", "bob", frame("call-end", "bob", "c1"));
+        verify(push).sendCallCancelled("bob", "c1");
+    }
+
+    @Test
+    void noCallCancelledPushWhenTheCalleeHasALiveSocket() throws Exception {
+        WebSocketSession alice = device("alice");
+        device("bob");
+        relay.handle(alice, "alice", "bob", frame("call-offer", "bob", "c1"));
+        relay.handle(alice, "alice", "bob", frame("call-end", "bob", "c1"));
+        verify(push, never()).sendCallCancelled(anyString(), anyString());
     }
 
     @Test

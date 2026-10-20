@@ -78,8 +78,9 @@ class CallRelay {
                 pendingOffers.put(to, new PendingOffer(sender, callId, json, Instant.now()));
                 sendToAll(to, json);
                 if (!isActive.test(to)) {
-                    // Generic text: push payloads pass through the push vendor.
-                    push.sendToUser(to, "Iris", "Incoming call", true);
+                    // No names: push payloads pass through the push vendor. The mobile app gets a data-only
+                    // message (callId + mode) it can ring from; web and the legacy app a generic notification.
+                    push.sendIncomingCall(to, callId, frame.path("mode").asText("video"));
                 }
             }
             case "call-answer" -> {
@@ -97,6 +98,8 @@ class CallRelay {
                 unpinPair(sender, to);
                 PendingOffer pending = pendingOffers.get(to);
                 if (pending != null && pending.from().equals(sender)) pendingOffers.remove(to);
+                // The callee may be ringing from a push with no socket open: tell its phone to stop.
+                if (callId != null && !hasLiveSocket(to)) push.sendCallCancelled(to, callId);
                 pending = pendingOffers.get(sender);
                 if (pending != null && pending.from().equals(to)) pendingOffers.remove(sender);
             }
@@ -150,6 +153,10 @@ class CallRelay {
             pins.remove(s);
             pinnedSessionOf.remove(user, s);
         }
+    }
+
+    private boolean hasLiveSocket(String user) {
+        return sessionsOf.apply(user).stream().anyMatch(WebSocketSession::isOpen);
     }
 
     private WebSocketSession livePin(String user) {

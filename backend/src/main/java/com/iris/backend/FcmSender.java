@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import java.io.FileInputStream;
 import java.io.InputStream;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Sends Android push via Firebase Cloud Messaging. Disabled (a no-op) unless
@@ -57,6 +58,88 @@ public class FcmSender {
             log.info("FCM enabled");
         } catch (Exception e) {
             log.error("FCM disabled: could not load credentials from {}", credentialsFile, e);
+        }
+    }
+
+    /** Application id of the React Native app; it handles data-only call pushes natively. */
+    public static final String MOBILE_APP_ID = "com.iris.chat.mobile";
+
+    /** What one FCM token receives for a call event. Pure data so the routing rule is testable. */
+    record CallPushPlan(boolean dataOnly, Map<String, String> data) { }
+
+    /**
+     * Incoming call: the mobile app gets a DATA-ONLY high-priority message (its own FirebaseMessagingService
+     * rings the call UI; the payload carries no names). Everything else (legacy Capacitor app, tokens without an
+     * app id) needs a visible notification, so it keeps the generic one.
+     */
+    static CallPushPlan planIncomingCall(String app, String callId, String mode) {
+        if (MOBILE_APP_ID.equals(app)) {
+            return new CallPushPlan(true, Map.of("type", "incoming-call", "callId", callId == null ? "" : callId,
+                    "mode", "audio".equals(mode) ? "audio" : "video"));
+        }
+        return new CallPushPlan(false, Map.of());
+    }
+
+    /** The caller hung up / call handled while the callee had no live socket. Only the mobile app can act on it. */
+    static CallPushPlan planCallCancelled(String app, String callId) {
+        if (MOBILE_APP_ID.equals(app) && callId != null && !callId.isBlank()) {
+            return new CallPushPlan(true, Map.of("type", "call-cancelled", "callId", callId));
+        }
+        return new CallPushPlan(false, Map.of());
+    }
+
+    /** True when the user has at least one token that needs the generic (visible) call notification. */
+    public void sendIncomingCall(String username, String callId, String mode) {
+        if (messaging == null) return;
+        for (FcmToken t : tokens.findByUsername(username)) {
+            CallPushPlan plan = planIncomingCall(t.getApp(), callId, mode);
+            Message.Builder b = Message.builder().setToken(t.getToken());
+            if (plan.dataOnly()) {
+                b.putAllData(plan.data()).setAndroidConfig(AndroidConfig.builder()
+                        .setPriority(AndroidConfig.Priority.HIGH)
+                        .setTtl(45_000L)
+                        .build());
+            } else {
+                b.setAndroidConfig(AndroidConfig.builder()
+                        .setPriority(AndroidConfig.Priority.HIGH)
+                        .setTtl(30_000L)
+                        .setNotification(AndroidNotification.builder()
+                                .setTitle("Iris").setBody("Incoming call").setChannelId("calls")
+                                .setVisibility(AndroidNotification.Visibility.PRIVATE)
+                                .build())
+                        .build());
+            }
+            deliver(username, t, b.build());
+        }
+    }
+
+    public void sendCallCancelled(String username, String callId) {
+        if (messaging == null) return;
+        for (FcmToken t : tokens.findByUsername(username)) {
+            CallPushPlan plan = planCallCancelled(t.getApp(), callId);
+            if (!plan.dataOnly()) continue;
+            deliver(username, t, Message.builder().setToken(t.getToken()).putAllData(plan.data())
+                    .setAndroidConfig(AndroidConfig.builder()
+                            .setPriority(AndroidConfig.Priority.HIGH)
+                            .setTtl(10_000L)
+                            .build())
+                    .build());
+        }
+    }
+
+    private void deliver(String username, FcmToken t, Message msg) {
+        try {
+            messaging.send(msg);
+        } catch (FirebaseMessagingException e) {
+            MessagingErrorCode code = e.getMessagingErrorCode();
+            if (code == MessagingErrorCode.UNREGISTERED || code == MessagingErrorCode.SENDER_ID_MISMATCH) {
+                log.info("Removing dead FCM token for {} ({})", username, code);
+                tokens.delete(t);
+            } else {
+                log.error("FCM push to {} failed ({})", username, code, e);
+            }
+        } catch (Exception e) {
+            log.error("FCM push to {} failed", username, e);
         }
     }
 

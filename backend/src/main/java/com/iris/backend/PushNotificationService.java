@@ -45,11 +45,29 @@ public class PushNotificationService {
     }
 
     /**
+     * Incoming call. Web push and legacy FCM tokens get the generic visible notification; tokens of the
+     * mobile app get a data-only message (see FcmSender.planIncomingCall).
+     */
+    public void sendIncomingCall(String username, String callId, String mode) {
+        fcmSender.sendIncomingCall(username, callId, mode);
+        sendWebPush(username, "Iris", "Incoming call");
+    }
+
+    /** The ringing call is over and the callee has no live socket: stop the mobile app's native ringing. */
+    public void sendCallCancelled(String username, String callId) {
+        fcmSender.sendCallCancelled(username, callId);
+    }
+
+    /**
      * Fan out to both browser (Web Push) subscriptions and Android (FCM) devices.
      * `urgent` marks call alerts: high priority + the "calls" channel on Android.
      */
     public void sendToUser(String username, String title, String body, boolean urgent) {
         fcmSender.sendToUser(username, title, body, urgent);
+        sendWebPush(username, title, body);
+    }
+
+    private void sendWebPush(String username, String title, String body) {
         List<PushSubscription> subs = subscriptions.findByUsername(username);
         for (PushSubscription sub : subs) {
             try {
