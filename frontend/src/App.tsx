@@ -13,9 +13,8 @@ import { NotV2Error } from "./lib/signal/messaging";
 import { getLegacyCache, getMessages, isEmpty as v2HistoryEmpty, mergeHistory, migrateHistory, patchMessage, setLegacyCache } from "./lib/messageStore";
 import { fetchBackupMeta, isRestoreDismissed, maybeAutoBackup } from "./lib/backup";
 import { disableNotifications, enableNotifications, hasExistingSubscription } from "./push";
-import { createPeerConnection, type CallSignal } from "./webrtc";
-import { playRingback, playRingtone, stopTone } from "./lib/sound";
-import type { ChatMessage, CallState, CallMode, UserProfile, FriendRequest } from "./types";
+import type { CallSignal } from "./webrtc";
+import type { ChatMessage, UserProfile, FriendRequest } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
 import { logIn, signUp, unlockKeyMaterial } from "./lib/credentials";
 import { uploadMedia, buildMediaEnvelope, parseMediaEnvelope } from "./lib/media";
@@ -35,9 +34,8 @@ import { AuthView } from "./components/AuthView";
 import { ChatListView } from "./components/ChatListView";
 import { ConversationView } from "./components/ConversationView";
 import { SettingsView } from "./components/SettingsView";
-import { IncomingCallModal } from "./components/IncomingCallModal";
-import { CallNoticeBanner } from "./components/CallNoticeBanner";
-import { VideoCallScreen } from "./components/VideoCallScreen";
+import { CallLayer } from "./components/call/CallLayer";
+import { useCall } from "./lib/call/useCall";
 import { UnlockKeyView } from "./components/UnlockKeyView";
 import { BackupSettings } from "./components/BackupSettings";
 import { DevicesSettings } from "./components/DevicesSettings";
@@ -106,20 +104,12 @@ function App() {
   const [pushError, setPushError] = useState<string | null>(null);
   const [isBrave, setIsBrave] = useState(false);
 
-  // ── call state ──────────────────────────────────────────────────
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+  // ── call state (all call logic lives in useCall) ──────────────
   const handleSignalRef = useRef<((s: CallSignal) => Promise<void>) | null>(null);
-  const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const audioSinkRef = useRef<HTMLAudioElement | null>(null);
-  const [callState, setCallState] = useState<CallState>({ kind: "idle" });
-  const [callNotice, setCallNotice] = useState<string | null>(null);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isCameraOff, setIsCameraOff] = useState(false);
-  const [speakerOn, setSpeakerOn] = useState(true);
-  const [reconnecting, setReconnecting] = useState(false);
+  const callSocketOpenRef = useRef<(() => void) | null>(null);
+  const call = useCall({ token, wsRef, onAccepted: (peer) => selectRecipientRef.current?.(peer) });
+  const callState = call.state;
+  const selectRecipientRef = useRef<((user: string) => void) | null>(null);
 
   // ── friend requests ─────────────────────────────────────────────
   const [friendRequests, setFriendRequests] = useState<FriendRequest[]>([]);
@@ -146,7 +136,6 @@ function App() {
              :                                     "list";
 
   const [showSplash, setShowSplash] = useState(true);
-  const [callMinimized, setCallMinimized] = useState(false);
 
   // Refs read by the long-lived ws.onmessage handler. Synced by a deps-less effect
   // below so the WS effect's deps stay [token] (no reconnect on sidebar clicks).
@@ -605,6 +594,7 @@ function App() {
         // Pull envelopes queued while this device was offline.
         if (signalDeviceId) ws.send(JSON.stringify({ type: "sync" }));
         if (recipientRef.current) ws.send(JSON.stringify({ type: "presence-query", user: recipientRef.current }));
+        callSocketOpenRef.current?.();
       };
 
       ws.onmessage = async (e) => {
@@ -870,275 +860,12 @@ function App() {
     });
   }
 
-  // ── camera / call lifecycle ─────────────────────────────────────
-  async function startCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } }
-      });
-      setLocalStream(stream);
-      return stream;
-    } catch (err) {
-      console.error("Camera/mic permission denied or unavailable", err);
-      return null;
-    }
-  }
-
-  async function startMicrophone() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      setLocalStream(stream);
-      return stream;
-    } catch (err) {
-      console.error("Microphone permission denied or unavailable", err);
-      return null;
-    }
-  }
-
-  function stopCamera() {
-    localStream?.getTracks().forEach((t) => t.stop());
-    setLocalStream(null);
-  }
-
-  function teardownCall() {
-    if (ringTimeoutRef.current) {
-      clearTimeout(ringTimeoutRef.current);
-      ringTimeoutRef.current = null;
-    }
-    pcRef.current?.close();
-    pcRef.current = null;
-    pendingIceRef.current = [];
-    setRemoteStream(null);
-    stopCamera();
-    setCallState({ kind: "idle" });
-    setCallMinimized(false);
-    setIsMuted(false);
-    setIsCameraOff(false);
-    setSpeakerOn(true);
-    setReconnecting(false);
-  }
-
-  // React to the WebRTC connection lifecycle so a call that can't connect
-  // (e.g. no TURN server across networks) doesn't hang on "Connecting…".
-  function onPeerState(state: RTCPeerConnectionState) {
-    if (state === "connected") {
-      setReconnecting(false);
-    } else if (state === "disconnected") {
-      setReconnecting(true);
-    } else if (state === "failed") {
-      setCallNotice("Call failed — couldn't connect");
-      teardownCall();
-    }
-  }
-
-  function toggleSpeaker() {
-    setSpeakerOn((v) => !v);
-  }
-
-  function toggleMute() {
-    if (!localStream) return;
-    const audioTracks = localStream.getAudioTracks();
-    const next = !isMuted;
-    audioTracks.forEach((t) => (t.enabled = !next));
-    setIsMuted(next);
-  }
-
-  function toggleCamera() {
-    if (!localStream) return;
-    const videoTracks = localStream.getVideoTracks();
-    const next = !isCameraOff;
-    videoTracks.forEach((t) => (t.enabled = !next));
-    setIsCameraOff(next);
-  }
-
-  async function flipCamera() {
-    if (!localStream) return;
-    const currentTrack = localStream.getVideoTracks()[0];
-    if (!currentTrack) return;
-    const settings = currentTrack.getSettings();
-    const newFacing = settings.facingMode === "environment" ? "user" : "environment";
-    try {
-      const newStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { exact: newFacing } },
-        audio: false,
-      });
-      const newTrack = newStream.getVideoTracks()[0];
-      localStream.removeTrack(currentTrack);
-      localStream.addTrack(newTrack);
-      currentTrack.stop();
-      const pc = pcRef.current;
-      if (pc) {
-        const sender = pc.getSenders().find((s) => s.track?.kind === "video");
-        if (sender) await sender.replaceTrack(newTrack);
-      }
-      setLocalStream(new MediaStream([...localStream.getTracks()]));
-    } catch (err) {
-      console.error("Flip camera failed (device may only have one camera)", err);
-    }
-  }
-
-  async function startCall(mode: CallMode) {
-    if (!recipient || !wsRef.current) return;
-    if (callState.kind !== "idle") return;
-    setCallState({ kind: "outgoing", to: recipient, mode });
-
-    let stream = localStream;
-    if (!stream) {
-      stream = mode === "video" ? await startCamera() : await startMicrophone();
-      if (!stream) {
-        setCallState({ kind: "idle" });
-        return;
-      }
-    }
-
-    const pc = await createPeerConnection(wsRef.current, recipient, token, setRemoteStream, onPeerState);
-    pcRef.current = pc;
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    wsRef.current.send(JSON.stringify({ type: "call-offer", to: recipient, payload: offer, mode }));
-
-    // Give up ringing after 30s if the other side never answers.
-    ringTimeoutRef.current = setTimeout(() => {
-      wsRef.current?.send(JSON.stringify({ type: "call-end", to: recipient }));
-      setCallNotice(`${recipient} didn't answer`);
-      teardownCall();
-    }, 30_000);
-  }
-
-  async function acceptCall() {
-    if (callState.kind !== "incoming") return;
-    if (!wsRef.current) return;
-    const { from, offer, mode } = callState;
-
-    let stream = localStream;
-    if (!stream) {
-      stream = mode === "video" ? await startCamera() : await startMicrophone();
-      if (!stream) {
-        wsRef.current.send(JSON.stringify({ type: "call-end", to: from }));
-        setCallState({ kind: "idle" });
-        return;
-      }
-    }
-
-    const pc = await createPeerConnection(wsRef.current, from, token, setRemoteStream, onPeerState);
-    pcRef.current = pc;
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream!));
-
-    await pc.setRemoteDescription(offer);
-    for (const c of pendingIceRef.current) {
-      try { await pc.addIceCandidate(c); } catch (e) { console.error("addIceCandidate", e); }
-    }
-    pendingIceRef.current = [];
-
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    wsRef.current.send(JSON.stringify({ type: "call-answer", to: from, payload: answer }));
-    setCallState({ kind: "active", peer: from, mode });
-  }
-
-  function rejectCall() {
-    if (callState.kind !== "incoming") return;
-    wsRef.current?.send(JSON.stringify({ type: "call-end", to: callState.from }));
-    setCallState({ kind: "idle" });
-  }
-
-  function hangUp() {
-    if (callState.kind === "outgoing" || callState.kind === "active") {
-      const peer = callState.kind === "outgoing" ? callState.to : callState.peer;
-      wsRef.current?.send(JSON.stringify({ type: "call-end", to: peer }));
-    }
-    teardownCall();
-  }
-
-  async function handleSignal(signal: CallSignal) {
-    if (signal.type === "call-offer") {
-      if (callState.kind !== "idle") {
-        wsRef.current?.send(JSON.stringify({ type: "call-end", to: signal.from }));
-        return;
-      }
-      // If we get an offer while sitting on the list view, jump into the chat with the caller
-      if (signal.from && signal.from !== recipient) {
-        selectRecipient(signal.from);
-      }
-      const mode: CallMode = (signal.type === "call-offer" && signal.mode) ? signal.mode : "video";
-      setCallState({ kind: "incoming", from: signal.from!, offer: signal.payload, mode });
-      return;
-    }
-    if (signal.type === "call-answer") {
-      const pc = pcRef.current;
-      if (!pc) return;
-      if (ringTimeoutRef.current) {
-        clearTimeout(ringTimeoutRef.current);
-        ringTimeoutRef.current = null;
-      }
-      await pc.setRemoteDescription(signal.payload);
-      for (const c of pendingIceRef.current) {
-        try { await pc.addIceCandidate(c); } catch (e) { console.error("addIceCandidate", e); }
-      }
-      pendingIceRef.current = [];
-      if (callState.kind === "outgoing") {
-        setCallState({ kind: "active", peer: callState.to, mode: callState.mode });
-      }
-      return;
-    }
-    if (signal.type === "call-ice") {
-      const pc = pcRef.current;
-      if (pc && pc.remoteDescription) {
-        // PC exists and remote description is set — add directly
-        try { await pc.addIceCandidate(signal.payload); } catch (e) { console.error("addIceCandidate", e); }
-      } else {
-        // Either: (a) PC hasn't been created yet (incoming call not yet
-        // accepted), or (b) remote description hasn't been set yet.
-        // Queue for later — acceptCall / call-answer handler will flush.
-        pendingIceRef.current.push(signal.payload);
-      }
-      return;
-    }
-    if (signal.type === "call-end") {
-      if (callState.kind === "outgoing") setCallNotice(`${callState.to} is busy or declined the call`);
-      else if (callState.kind === "incoming") setCallNotice(`${callState.from} canceled the call`);
-      else if (callState.kind === "active") setCallNotice(`${callState.peer} ended the call`);
-      teardownCall();
-      return;
-    }
-  }
-
-  // Keep the ref pointing at the latest closure of handleSignal
+  // Keep the long-lived socket handlers pointed at the current call controller.
   useEffect(() => {
-    handleSignalRef.current = handleSignal;
+    handleSignalRef.current = call.handleSignal;
+    callSocketOpenRef.current = call.onSocketOpen;
+    selectRecipientRef.current = selectRecipient;
   });
-
-  // Auto-dismiss the call notice
-  useEffect(() => {
-    if (!callNotice) return;
-    const id = setTimeout(() => setCallNotice(null), 4000);
-    return () => clearTimeout(id);
-  }, [callNotice]);
-
-  // Ring tones: ringback while we call out, ringtone while a call comes in,
-  // silence once the call connects or ends.
-  useEffect(() => {
-    if (callState.kind === "outgoing") playRingback();
-    else if (callState.kind === "incoming") playRingtone();
-    else stopTone();
-    return () => stopTone();
-  }, [callState.kind]);
-
-  // Single, persistent remote-audio sink. Living at the app level (not inside
-  // VideoCallScreen) means audio keeps playing when the call is minimized and
-  // works identically for voice and video calls — exactly one element ever
-  // plays the remote audio, so there's no echo.
-  useEffect(() => {
-    if (audioSinkRef.current) audioSinkRef.current.srcObject = remoteStream;
-  }, [remoteStream]);
-
-  useEffect(() => {
-    if (audioSinkRef.current) audioSinkRef.current.muted = !speakerOn;
-  }, [speakerOn]);
-
 
   // Page Visibility → push trigger
   useEffect(() => {
@@ -1263,72 +990,7 @@ function App() {
 
   return (
     <AppShell>
-      {/* Persistent remote-audio sink — the single source of call audio. */}
-      <audio ref={audioSinkRef} autoPlay className="hidden" />
-
-      {callNotice && <CallNoticeBanner message={callNotice} />}
-
-      {callState.kind === "incoming" && (
-        <IncomingCallModal
-          from={callState.from}
-          mode={callState.mode}
-          onAccept={acceptCall}
-          onReject={rejectCall}
-        />
-      )}
-
-      {(callState.kind === "outgoing" || callState.kind === "active") && !callMinimized && (
-        <VideoCallScreen
-          peer={callState.kind === "outgoing" ? callState.to : callState.peer}
-          callKind={callState.kind}
-          callMode={callState.mode}
-          localStream={localStream}
-          remoteStream={remoteStream}
-          reconnecting={reconnecting}
-          onHangUp={hangUp}
-          onMinimize={() => setCallMinimized(true)}
-          onToggleMute={toggleMute}
-          onToggleCamera={toggleCamera}
-          onToggleSpeaker={toggleSpeaker}
-          onFlipCamera={flipCamera}
-          isMuted={isMuted}
-          isCameraOff={isCameraOff}
-          speakerOn={speakerOn}
-        />
-      )}
-
-      {(callState.kind === "outgoing" || callState.kind === "active") && callMinimized && (
-        <div
-          className="fixed bottom-20 left-4 right-4 z-50 bg-[#0b0f14] rounded-2xl shadow-2xl flex items-center gap-3 px-4 py-3 border border-white/10"
-          onClick={() => setCallMinimized(false)}
-          style={{ cursor: "pointer" }}
-        >
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center text-white font-bold text-base shrink-0"
-            style={{ background: "#3b82f6" }}
-          >
-            {(callState.kind === "outgoing" ? callState.to : callState.peer)[0]?.toUpperCase()}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-white text-sm font-semibold truncate">
-              {callState.kind === "outgoing" ? callState.to : callState.peer}
-            </p>
-            <p className="text-white/50 text-xs">
-              {callState.kind === "active" ? "Tap to return" : "Calling…"}
-            </p>
-          </div>
-          <button
-            onClick={e => { e.stopPropagation(); hangUp(); }}
-            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-            style={{ background: "#ef4444" }}
-            aria-label="End call"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4" style={{ transform: "rotate(135deg)" }}>
-              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
-            </svg>
-          </button>
-        </div>
-      )}
+      <CallLayer call={call} profileOf={(u) => users.find((x) => x.username === u)} />
 
       {view === "settings" && (
         <SettingsView
@@ -1383,9 +1045,9 @@ function App() {
           onStartReply={setReplyTo}
           onCancelReply={() => setReplyTo(null)}
           callState={callState}
-          onStartVoiceCall={() => startCall("audio")}
-          onStartVideoCall={() => startCall("video")}
-          onHangUp={hangUp}
+          onStartVoiceCall={() => void call.startCall(recipient, "audio")}
+          onStartVideoCall={() => void call.startCall(recipient, "video")}
+          onHangUp={call.hangUp}
           onBack={() => navigate(-1)}
         />
       )}

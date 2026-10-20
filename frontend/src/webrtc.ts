@@ -3,11 +3,16 @@
 import { apiBase } from './lib/config';
 import { apiFetch } from './lib/api';
 
+// Every signal carries the callId of the call it belongs to. reneg marks an
+// in-call renegotiation (ICE restart, voice→video upgrade) rather than a new call.
+type SignalBase = { to: string; from?: string; callId?: string }
 export type CallSignal =
-  | { type: 'call-offer';  to: string; from?: string; payload: RTCSessionDescriptionInit; mode?: 'audio' | 'video' }
-  | { type: 'call-answer'; to: string; from?: string; payload: RTCSessionDescriptionInit }
-  | { type: 'call-ice';    to: string; from?: string; payload: RTCIceCandidateInit }
-  | { type: 'call-end';    to: string; from?: string }
+  | (SignalBase & { type: 'call-offer'; payload: RTCSessionDescriptionInit; mode?: 'audio' | 'video'; reneg?: boolean })
+  | (SignalBase & { type: 'call-answer'; payload: RTCSessionDescriptionInit; reneg?: boolean })
+  | (SignalBase & { type: 'call-ice'; payload: RTCIceCandidateInit })
+  | (SignalBase & { type: 'call-end'; reason?: string })
+  | (SignalBase & { type: 'call-state'; muted?: boolean; cameraOff?: boolean; video?: boolean; restart?: boolean })
+  | (SignalBase & { type: 'call-resume' })
 
 async function getIceServers(token: string | null): Promise<RTCConfiguration> {
   try {
@@ -35,53 +40,39 @@ async function getIceServers(token: string | null): Promise<RTCConfiguration> {
 
 /**
  * Create a peer connection wired to:
- *   - send any local ICE candidates to the remote user via `ws`
- *   - call `onTrack` when remote media arrives
+ *   - send local ICE candidates to the remote user through `send` (which always
+ *     uses the current socket, so a reconnect mid-call doesn't strand candidates)
+ *   - call `onTrack` whenever remote media changes — with a fresh MediaStream
+ *     object each time, so React re-renders when video is added mid-call
  */
 export async function createPeerConnection(
-  ws: WebSocket,
+  send: (signal: CallSignal) => void,
   remoteUser: string,
+  callId: string,
   token: string | null,
   onTrack: (stream: MediaStream) => void,
   onStateChange?: (state: RTCPeerConnectionState) => void,
 ): Promise<RTCPeerConnection> {
   const rtcConfig = await getIceServers(token);
-  const pc = new RTCPeerConnection(rtcConfig)
+  const pc = new RTCPeerConnection(rtcConfig);
 
   pc.onicecandidate = (e) => {
-    if (e.candidate && ws.readyState === WebSocket.OPEN) {
-      const signal: CallSignal = {
-        type: 'call-ice',
-        to: remoteUser,
-        payload: e.candidate.toJSON(),
-      }
-      ws.send(JSON.stringify(signal))
-    }
-  }
+    if (e.candidate) send({ type: 'call-ice', to: remoteUser, callId, payload: e.candidate.toJSON() });
+  };
 
-  const stream = new MediaStream()
+  const remote = new MediaStream();
+  const publish = () => onTrack(new MediaStream(remote.getTracks()));
 
   pc.ontrack = (e) => {
-    if (e.streams && e.streams[0]) {
-      onTrack(e.streams[0])
-    } else {
-      stream.addTrack(e.track)
-      onTrack(stream)
-    }
-  }
+    const track = e.track;
+    if (!remote.getTracks().includes(track)) remote.addTrack(track);
+    track.onended = () => { remote.removeTrack(track); publish(); };
+    track.onunmute = publish;
+    track.onmute = publish;
+    publish();
+  };
 
-  pc.onconnectionstatechange = () => {
-    console.log('[WebRTC] connection state:', pc.connectionState)
-    onStateChange?.(pc.connectionState)
-  }
-  
-  pc.oniceconnectionstatechange = () => {
-    console.log('[WebRTC] ice state:', pc.iceConnectionState)
-  }
+  pc.onconnectionstatechange = () => onStateChange?.(pc.connectionState);
 
-  pc.onicegatheringstatechange = () => {
-    console.log('[WebRTC] gathering state:', pc.iceGatheringState)
-  }
-
-  return pc
+  return pc;
 }
