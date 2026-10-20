@@ -1,2 +1,5 @@
 /build/*
 !/build/.npmkeep
+
+# Firebase client config — per-developer, never commit
+google-services.json

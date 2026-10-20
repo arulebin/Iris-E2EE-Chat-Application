@@ -105,6 +105,12 @@
 			<artifactId>bcprov-jdk18on</artifactId>
 			<version>1.78</version>
 		</dependency>
+		<!-- FCM push for the Android app (only active when credentials are configured) -->
+		<dependency>
+			<groupId>com.google.firebase</groupId>
+			<artifactId>firebase-admin</artifactId>
+			<version>9.4.3</version>
+		</dependency>
 
 	</dependencies>
 

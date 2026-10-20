@@ -125,7 +125,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
                         && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE)));
                 if (!recipientActive) {
                     // Generic text: push payloads pass through the browser vendor's push service.
-                    pushNotificationService.sendToUser(to, "Iris", "Incoming call");
+                    pushNotificationService.sendToUser(to, "Iris", "Incoming call", true);
                 }
             } else {
                 sendToUser(to, forwarded.toString());
