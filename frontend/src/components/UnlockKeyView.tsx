@@ -4,21 +4,22 @@ import { IrisMark, LockIcon, EyeIcon, EyeOffIcon } from "./icons";
 type Props = {
   me: string | null;
   error: string | null;
+  busy: boolean;
   onUnlock: (password: string) => void;
   onLogout: () => void;
 };
 
 // Shown when the app is logged in (valid token) but the encrypted private key
-// isn't in this browser's storage and no password is in memory to restore it.
-// Re-entering the password derives the KEK and recovers the SAME key from the
-// server backup — it never generates a new keypair.
-export function UnlockKeyView({ me, error, onUnlock, onLogout }: Props) {
+// isn't in this browser's storage and no key-unlock secret is in memory to restore
+// it. Re-entering the password re-derives that secret locally and recovers the SAME
+// key from the server backup — it never generates a new keypair.
+export function UnlockKeyView({ me, error, busy, onUnlock, onLogout }: Props) {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (password) onUnlock(password);
+    if (password && !busy) onUnlock(password);
   }
 
   return (
@@ -71,9 +72,10 @@ export function UnlockKeyView({ me, error, onUnlock, onLogout }: Props) {
 
         <button
           type="submit"
-          className="mt-1 bg-primary hover:bg-primary-hover text-white font-bold py-2.5 rounded-xl transition-transform active:scale-[0.98]"
+          disabled={busy}
+          className="mt-1 bg-primary hover:bg-primary-hover text-white font-bold py-2.5 rounded-xl transition-transform active:scale-[0.98] disabled:opacity-60"
         >
-          Unlock
+          {busy ? "Unlocking…" : "Unlock"}
         </button>
 
         {error && <p className="text-danger text-sm text-center">{error}</p>}

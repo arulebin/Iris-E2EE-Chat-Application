@@ -6,6 +6,8 @@ type Props = {
   username: string;
   password: string;
   error: string | null;
+  // True while the password is being stretched (PBKDF2, ~1s) and sent.
+  busy: boolean;
   onUsernameChange: (v: string) => void;
   onPasswordChange: (v: string) => void;
   onSubmit: (e: React.FormEvent) => void;
@@ -17,6 +19,7 @@ export function AuthView({
   username,
   password,
   error,
+  busy,
   onUsernameChange,
   onPasswordChange,
   onSubmit,
@@ -114,9 +117,10 @@ export function AuthView({
 
           <button
             type="submit"
-            className="mt-1 bg-primary hover:bg-primary-hover text-white font-bold py-2.5 rounded-xl transition-transform active:scale-[0.98]"
+            disabled={busy}
+            className="mt-1 bg-primary hover:bg-primary-hover text-white font-bold py-2.5 rounded-xl transition-transform active:scale-[0.98] disabled:opacity-60"
           >
-            {isLogin ? "Log in" : "Create account"}
+            {busy ? "Securing your keys…" : isLogin ? "Log in" : "Create account"}
           </button>
         </form>
 
