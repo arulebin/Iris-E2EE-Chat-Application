@@ -1,6 +1,6 @@
 import type { CallState, UserProfile } from "../types";
 import { Avatar } from "./Avatar";
-import { BackIcon, MoreIcon, PhoneIcon, VideoIcon } from "./icons";
+import { BackIcon, MoreIcon, PhoneIcon, ShieldCheckIcon, VideoIcon } from "./icons";
 
 type Props = {
   peer: string;
@@ -11,6 +11,8 @@ type Props = {
   onStartVoiceCall: () => void;
   onStartVideoCall: () => void;
   onHangUp: () => void;
+  verified?: boolean;
+  onVerify?: () => void;
 };
 
 export function ConversationHeader({
@@ -22,6 +24,8 @@ export function ConversationHeader({
   onStartVoiceCall,
   onStartVideoCall,
   onHangUp,
+  verified,
+  onVerify,
 }: Props) {
   const inCall = callState.kind === "outgoing" || callState.kind === "active";
   const subtitle =
@@ -46,7 +50,14 @@ export function ConversationHeader({
       <Avatar name={peerProfile?.preferredName || peer} avatarUrl={peerProfile?.avatarUrl} size="md" online={online} />
 
       <div className="flex-1 min-w-0">
-        <p className="font-bold text-navy truncate">{peerProfile?.preferredName || peer}</p>
+        <p className="font-bold text-navy truncate flex items-center gap-1">
+          <span className="truncate">{peerProfile?.preferredName || peer}</span>
+          {verified && (
+            <span className="text-online shrink-0" title="Safety number verified">
+              <ShieldCheckIcon className="w-4 h-4" />
+            </span>
+          )}
+        </p>
         {subtitle && <p className="text-xs text-muted">{subtitle}</p>}
       </div>
 
@@ -75,6 +86,17 @@ export function ConversationHeader({
             <PhoneIcon />
           </button>
         </div>
+      )}
+
+      {onVerify && (
+        <button
+          onClick={onVerify}
+          className="text-navy hover:opacity-70 p-2"
+          aria-label="Verify safety number"
+          title="Verify safety number"
+        >
+          <ShieldCheckIcon />
+        </button>
       )}
 
       <button
