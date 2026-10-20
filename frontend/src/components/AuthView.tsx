@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { IrisMark, UserIcon, LockIcon, EyeIcon, EyeOffIcon } from "./icons";
 
+// Mirrors UserService.USERNAME on the backend (same wording as its error).
+const USERNAME_RULE = "Username must be 3–32 characters: letters, numbers and underscores only";
+
 type Props = {
   mode: "login" | "signup";
   username: string;
@@ -88,9 +91,16 @@ export function AuthView({
               required
               autoFocus
               autoComplete="username"
+              // New accounts only — older usernames outside this rule can still log in.
+              pattern={isLogin ? undefined : "[A-Za-z0-9_]{3,32}"}
+              title={isLogin ? undefined : USERNAME_RULE}
+              aria-describedby={isLogin ? undefined : "username-rule"}
               className="w-full pl-10 pr-3 py-2.5 bg-bg border border-muted-soft rounded-xl text-navy placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary transition"
             />
           </div>
+          {!isLogin && (
+            <p id="username-rule" className="-mt-1 px-1 text-xs text-muted">{USERNAME_RULE}</p>
+          )}
 
           <div className="relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted">

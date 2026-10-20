@@ -14,16 +14,23 @@ import org.springframework.web.bind.annotation.RestController;
 public class CredentialController {
 
     private final UserService userService;
+    private final SessionService sessionService;
+    private final JwtService jwtService;
 
-    public CredentialController(UserService userService) {
+    public CredentialController(UserService userService, SessionService sessionService, JwtService jwtService) {
         this.userService = userService;
+        this.sessionService = sessionService;
+        this.jwtService = jwtService;
     }
 
+    // A credential change ends every existing login of the account. The calling
+    // device gets a fresh {token, refreshToken} so its own upgrade doesn't log it out.
     @PostMapping("/upgrade")
     public ResponseEntity<?> upgrade(@RequestBody UserService.UpgradeRequest req, Authentication auth) {
         try {
             userService.upgradeCredentials(auth.getName(), req);
-            return ResponseEntity.ok().build();
+            String refreshToken = sessionService.revokeAllAndReissue(auth.getName());
+            return ResponseEntity.ok(new LoginResponse(jwtService.generateToken(auth.getName()), refreshToken));
         } catch (SecurityException e) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(e.getMessage());
         } catch (IllegalStateException e) {

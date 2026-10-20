@@ -1,5 +1,6 @@
 import { PushNotifications } from '@capacitor/push-notifications'
 import { apiBase } from './config'
+import { apiFetch } from './api'
 
 // Android app push via Firebase Cloud Messaging. Android WebViews have no Web
 // Push, so the native shell registers an FCM token instead and the backend
@@ -71,7 +72,7 @@ export async function enableNativeNotifications(authToken: string): Promise<void
   await PushNotifications.register()
   const fcmToken = await tokenPromise
 
-  const res = await fetch(`${apiBase}/api/push/fcm-token`, {
+  const res = await apiFetch(`${apiBase}/api/push/fcm-token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
     body: JSON.stringify({ token: fcmToken }),
@@ -91,7 +92,7 @@ export async function disableNativeNotifications(authToken: string): Promise<voi
   const fcmToken = readStoredToken()
   writeStoredToken(null)
   if (fcmToken) {
-    await fetch(`${apiBase}/api/push/fcm-token`, {
+    await apiFetch(`${apiBase}/api/push/fcm-token`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
       body: JSON.stringify({ token: fcmToken }),

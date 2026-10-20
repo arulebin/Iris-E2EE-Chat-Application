@@ -1,4 +1,5 @@
 import { apiBase } from "./config";
+import { setSession } from "./api";
 import {
   deriveCredentials,
   fetchAuthSalt,
@@ -19,7 +20,10 @@ async function postLogin(body: { username: string; authKey?: string; password?: 
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error((await res.text()) || "login failed");
-  return (await res.json()).token;
+  const { token, refreshToken } = (await res.json()) as { token: string; refreshToken?: string };
+  // Stored now so the legacy-upgrade call below (and everything after) can refresh.
+  setSession(token, refreshToken);
+  return token;
 }
 
 export async function signUp(username: string, password: string): Promise<Session> {

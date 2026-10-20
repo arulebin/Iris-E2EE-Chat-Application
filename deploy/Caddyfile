@@ -1,3 +1,19 @@
+# The WebSocket authenticates with ?token=<JWT>, and Caddy's error log (e.g. a 502
+# while the backend restarts) records the request URI. Strip the token from every
+# log line. (Authorization/Cookie headers are already redacted by Caddy.)
+{
+	log default {
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					delete token
+				}
+			}
+		}
+	}
+}
+
 # Automatic HTTPS (Let's Encrypt) for the API + WebSocket endpoint.
 # IRIS_DOMAIN comes from .env — e.g. api.yourdomain.tech, or <ip-with-dashes>.sslip.io
 # until you have a domain. WebSocket upgrades are proxied automatically.

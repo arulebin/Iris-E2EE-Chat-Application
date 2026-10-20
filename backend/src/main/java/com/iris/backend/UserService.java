@@ -16,6 +16,10 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
     static final int SALT_BYTES = 16;
+    // Usernames end up in URLs, IndexedDB key prefixes and (deep-linked) routes, so keep
+    // them to a separator-free charset. Existing accounts created before this rule keep
+    // working — it only applies to new signups.
+    static final java.util.regex.Pattern USERNAME = java.util.regex.Pattern.compile("^[A-Za-z0-9_]{3,32}$");
     static final int AUTH_KEY_BYTES = 32;
 
     private final UserRepository userRepository;
@@ -39,6 +43,9 @@ public class UserService {
     public User signup(String username, String authKey, String authSalt) {
         if(username ==null || username.isBlank()){
             throw new IllegalArgumentException("Error: Username and Password cannot be null or blank");
+        }
+        if(!USERNAME.matcher(username).matches()){
+            throw new IllegalArgumentException("Username must be 3–32 characters: letters, numbers and underscores only");
         }
         if(!isBase64OfLength(authKey, AUTH_KEY_BYTES) || !isBase64OfLength(authSalt, SALT_BYTES)){
             throw new IllegalArgumentException("Error: This version of Iris is outdated — please refresh the page");

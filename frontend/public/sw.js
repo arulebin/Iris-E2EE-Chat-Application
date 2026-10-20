@@ -1,6 +1,8 @@
 // Iris service worker — caching + push notifications
 
-const CACHE_VERSION = 'iris-v2'
+// Stamped with a fresh id by the Vite build (see vite.config.ts), so every deploy
+// gets its own cache and activation drops the previous deploy's assets.
+const CACHE_VERSION = 'iris-__BUILD_ID__'
 
 const APP_SHELL = [
   '/',
@@ -45,10 +47,18 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin !== self.location.origin) return
 
-  // Network-first for HTML navigations
+  // Network-first for HTML navigations. Each successful load refreshes the cached
+  // shell, so the offline fallback always references assets of the current deploy
+  // (a stale index.html would point at hashed bundles that were never cached).
   if (req.mode === 'navigate') {
     event.respondWith(
-      fetch(req).catch(() => caches.match('/index.html').then(r => r || Response.error()))
+      fetch(req).then((res) => {
+        if (res.ok && res.type === 'basic') {
+          const copy = res.clone()
+          caches.open(CACHE_VERSION).then((cache) => cache.put('/index.html', copy))
+        }
+        return res
+      }).catch(() => caches.match('/index.html').then(r => r || Response.error()))
     )
     return
   }

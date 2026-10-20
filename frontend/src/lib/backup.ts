@@ -1,5 +1,6 @@
 import { del, get, set } from 'idb-keyval'
 import { apiBase } from './config'
+import { apiFetch } from './api'
 import { exportAll, importAll } from './messageStore'
 import type { ChatMessage } from '../types'
 
@@ -158,7 +159,7 @@ export async function openBackup(base: CryptoKey, me: string, blob: Uint8Array<A
 export type BackupMeta = { exists: boolean; size?: number; updatedAt?: string; keyId?: string }
 
 export async function fetchBackupMeta(token: string): Promise<BackupMeta> {
-  const res = await fetch(`${apiBase}/api/backup/meta`, { headers: { Authorization: `Bearer ${token}` } })
+  const res = await apiFetch(`${apiBase}/api/backup/meta`, { headers: { Authorization: `Bearer ${token}` } })
   if (!res.ok) throw new Error(`Backup status failed: ${res.status}`)
   return res.json()
 }
@@ -197,7 +198,7 @@ export async function backupNow(me: string, token: string, opts: { replace?: boo
     if (meta.exists && meta.keyId && meta.keyId !== keyId) throw new BackupKeyChangedError()
   }
   const blob = await sealBackup(base, me, { v: 1, createdAt: new Date().toISOString(), conversations: await exportAll(me) })
-  const res = await fetch(`${apiBase}/api/backup`, {
+  const res = await apiFetch(`${apiBase}/api/backup`, {
     method: 'PUT',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream', 'X-Backup-Key-Id': keyId },
     body: blob,
@@ -214,7 +215,7 @@ export async function backupNow(me: string, token: string, opts: { replace?: boo
  */
 export async function restoreBackup(me: string, token: string, recoveryKey: string): Promise<number> {
   const base = await importRecoveryKey(parseRecoveryKey(recoveryKey))
-  const res = await fetch(`${apiBase}/api/backup`, { headers: { Authorization: `Bearer ${token}` } })
+  const res = await apiFetch(`${apiBase}/api/backup`, { headers: { Authorization: `Bearer ${token}` } })
   if (res.status === 404) throw new Error('There is no backup for this account')
   if (!res.ok) throw new Error(`Backup download failed: ${res.status}`)
   let payload: BackupPayload
@@ -231,7 +232,7 @@ export async function restoreBackup(me: string, token: string, recoveryKey: stri
 }
 
 export async function disableBackup(me: string, token: string): Promise<void> {
-  const res = await fetch(`${apiBase}/api/backup`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
+  const res = await apiFetch(`${apiBase}/api/backup`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } })
   if (!res.ok && res.status !== 404) throw new Error(`Couldn't delete the backup: ${res.status}`)
   await del(localKeyFor(me))
   await del(lastBackupFor(me))
