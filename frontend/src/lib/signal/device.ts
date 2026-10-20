@@ -1,4 +1,5 @@
-import libsignal, { KeyHelper, type KeyPairType } from '@privacyresearch/libsignal-protocol-typescript'
+import * as libsignalNs from '@privacyresearch/libsignal-protocol-typescript'
+import { KeyHelper, type KeyPairType } from '@privacyresearch/libsignal-protocol-typescript'
 import { fromBase64, signWithLegacyKey, toBase64, unwrapWithMaster, wrapWithMaster } from '../../crypto'
 import { HttpError, signalApi, type PreKeyDto, type SignedPreKeyDto } from './api'
 import { bytesEqual, SignalStore, type DeviceState } from './store'
@@ -37,9 +38,19 @@ export function needsPasswordError(): Error {
   return new Error('Password required to set up secure messaging on this device — log in again')
 }
 
-let curvePromise: ReturnType<typeof libsignal> | null = null
+// The package is CommonJS with `exports.default = init`. Bundlers disagree on what
+// a default import of that resolves to: vitest/Vite dev give the function, while the
+// production (rolldown) build gave the whole exports object — so `libsignal()` threw
+// "default is not a function" only in shipped builds. Resolve it explicitly.
+type InitCurve = typeof libsignalNs.default
+const initCurve: InitCurve = (() => {
+  const ns = libsignalNs as unknown as { default: InitCurve | { default: InitCurve } }
+  return typeof ns.default === 'function' ? ns.default : ns.default.default
+})()
+
+let curvePromise: ReturnType<InitCurve> | null = null
 async function derivePublicKey(privKey: ArrayBuffer): Promise<ArrayBuffer> {
-  curvePromise ??= libsignal()
+  curvePromise ??= initCurve()
   const { Curve } = await curvePromise
   return Curve.createKeyPair(privKey).pubKey
 }
