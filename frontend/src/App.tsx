@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { get, set } from "idb-keyval";
+import type { MasterKey, RsaPrivateKey, RsaPublicKey } from "@iris/core";
 import {
   ensureKeyPair,
   encryptMessage,
@@ -87,12 +88,12 @@ function App() {
   const wsRef = useRef<WebSocket | null>(null);
 
   // ── crypto state ────────────────────────────────────────────────
-  const [privateKey, setPrivateKey] = useState<CryptoKey | null>(null);
-  const [myPublicKey, setMyPublicKey] = useState<CryptoKey | null>(null);
+  const [privateKey, setPrivateKey] = useState<RsaPrivateKey | null>(null);
+  const [myPublicKey, setMyPublicKey] = useState<RsaPublicKey | null>(null);
   // The open contact's keys, tagged with whom they belong to so a stale key can
   // never pair with a newly opened conversation (see the derivation below).
   const [contactKeys, setContactKeys] =
-    useState<{ peer: string; rsaKey: CryptoKey | null; identityKey: ArrayBuffer | null } | null>(null);
+    useState<{ peer: string; rsaKey: RsaPublicKey | null; identityKey: ArrayBuffer | null } | null>(null);
   // Set when the keypair can't be unlocked because no password is in memory
   // (e.g. reopening the app on a persisted token with IndexedDB evicted), which
   // routes the user to UnlockKeyView instead of a silently-broken session.
@@ -101,7 +102,7 @@ function App() {
   const [unlocking, setUnlocking] = useState(false);
   // In-memory secret (derived from the password at login/unlock) that unwraps the
   // private-key backup. Never persisted and never sent to the server.
-  const [keyMaterial, setKeyMaterial] = useState<CryptoKey | null>(null);
+  const [keyMaterial, setKeyMaterial] = useState<MasterKey | null>(null);
 
   // ── Signal-protocol state (v2, forward-secret messaging) ────────
   // The client lives in a ref (it's read by the long-lived WS handler); the device
