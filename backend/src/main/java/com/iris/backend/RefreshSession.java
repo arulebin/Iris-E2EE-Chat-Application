@@ -9,6 +9,9 @@ import java.time.Instant;
  * {@code familyId}. Presenting an already-rotated token outside the short race
  * window means it was copied, so the whole family is revoked.
  *
+ * Like WhatsApp, a login never expires by time: it ends only on logout, device
+ * removal, a credential change, or detected token reuse.
+ *
  * Only a SHA-256 of the token is stored — a database leak can't be replayed.
  */
 @Entity
@@ -16,7 +19,8 @@ import java.time.Instant;
     name = "refresh_sessions",
     indexes = {
         @Index(columnList = "familyId"),
-        @Index(columnList = "username, deviceId")
+        @Index(columnList = "username, deviceId"),
+        @Index(columnList = "revokedAt")
     }
 )
 public class RefreshSession {
@@ -41,9 +45,6 @@ public class RefreshSession {
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
-    @Column(nullable = false)
-    private Instant expiresAt;
-
     private Instant revokedAt;
 
     @Column(length = 16)
@@ -51,12 +52,11 @@ public class RefreshSession {
 
     protected RefreshSession() { }
 
-    public RefreshSession(String username, String tokenHash, String familyId, Integer deviceId, Instant expiresAt) {
+    public RefreshSession(String username, String tokenHash, String familyId, Integer deviceId) {
         this.username = username;
         this.tokenHash = tokenHash;
         this.familyId = familyId;
         this.deviceId = deviceId;
-        this.expiresAt = expiresAt;
     }
 
     public Long getId() { return id; }
@@ -65,7 +65,6 @@ public class RefreshSession {
     public String getFamilyId() { return familyId; }
     public Integer getDeviceId() { return deviceId; }
     public Instant getCreatedAt() { return createdAt; }
-    public Instant getExpiresAt() { return expiresAt; }
     public Instant getRevokedAt() { return revokedAt; }
     public String getRevokeReason() { return revokeReason; }
 

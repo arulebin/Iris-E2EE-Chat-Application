@@ -23,7 +23,7 @@ class SessionServiceTest {
     @BeforeEach
     void setUp() {
         rows.clear();
-        service = new SessionService(fakeSessions(), fakeDevices(), Duration.ofDays(30), clock);
+        service = new SessionService(fakeSessions(), fakeDevices(), clock);
     }
 
     @Test
@@ -64,10 +64,36 @@ class SessionServiceTest {
     }
 
     @Test
-    void expiredTokenIsRejected() {
+    void loginNeverExpiresByTime() {
         String t = service.issue("alice");
-        clock.advance(Duration.ofDays(31));
-        assertThrows(SessionService.InvalidRefreshException.class, () -> service.rotate(t, null));
+        clock.advance(Duration.ofDays(3 * 365));   // offline for years
+        String t2 = assertDoesNotThrow(() -> service.rotate(t, null).refreshToken());
+        clock.advance(Duration.ofDays(400));
+        assertDoesNotThrow(() -> service.rotate(t2, null));
+    }
+
+    @Test
+    void credentialChangeEndsEveryLoginButReissuesTheCaller() {
+        String phone = service.issue("alice");
+        String laptop = service.issue("alice");
+        String bob = service.issue("bob");
+        String fresh = service.revokeAllAndReissue("alice");
+        assertThrows(SessionService.InvalidRefreshException.class, () -> service.rotate(phone, null));
+        assertThrows(SessionService.InvalidRefreshException.class, () -> service.rotate(laptop, null));
+        assertDoesNotThrow(() -> service.rotate(fresh, null));   // the upgrading device stays in
+        assertDoesNotThrow(() -> service.rotate(bob, null));     // other accounts untouched
+    }
+
+    @Test
+    void purgeKeepsLiveSessionsAndDropsOldRevokedRows() {
+        String idle = service.issue("alice");                    // never refreshed, still live
+        String t1 = service.issue("bob");
+        service.rotate(t1, null);                                // t1 is now a revoked row
+        clock.advance(SessionService.REVOKED_RETENTION.plusDays(1));
+        service.purgeRevoked();
+        assertTrue(rows.stream().allMatch(s -> s.getRevokedAt() == null));
+        assertEquals(2, rows.size());                            // alice's + bob's successor
+        assertDoesNotThrow(() -> service.rotate(idle, null));
     }
 
     @Test
@@ -131,7 +157,16 @@ class SessionServiceTest {
                         if (s.getUsername().equals(args[0]) && Integer.valueOf((int) args[1]).equals(s.getDeviceId()) && s.getRevokedAt() == null) { s.revoke((Instant) args[2], "DEVICE"); n++; }
                     yield n;
                 }
-                case "deleteExpiredBefore" -> { int before = rows.size(); rows.removeIf(s -> s.getExpiresAt().isBefore((Instant) args[0])); yield before - rows.size(); }
+                case "revokeAllForUser" -> {
+                    int n = 0;
+                    for (RefreshSession s : rows) if (s.getUsername().equals(args[0]) && s.getRevokedAt() == null) { s.revoke((Instant) args[1], (String) args[2]); n++; }
+                    yield n;
+                }
+                case "deleteRevokedBefore" -> {
+                    int before = rows.size();
+                    rows.removeIf(s -> s.getRevokedAt() != null && s.getRevokedAt().isBefore((Instant) args[0]));
+                    yield before - rows.size();
+                }
                 case "hashCode" -> System.identityHashCode(proxy);
                 case "equals" -> proxy == args[0];
                 case "toString" -> "FakeRefreshSessionRepository";

@@ -1,6 +1,6 @@
 import { get, set } from 'idb-keyval'
 import { apiBase } from './lib/config'
-import { apiFetch } from './lib/api'
+import { apiFetch, setSession } from './lib/api'
 
 
 const PBKDF2_ITERATIONS = 600_000 
@@ -368,6 +368,13 @@ export async function upgradeLegacyAccount(username: string, password: string, t
     throw err
   }
   if (!res.ok) throw new Error(`Account upgrade failed: ${res.status}`)
+
+  // The upgrade ends every other login of the account; this device gets a fresh pair
+  // so it isn't logged out by its own action. (Older servers return an empty body.)
+  try {
+    const data = (await res.json()) as { token?: string; refreshToken?: string }
+    if (data.token && data.refreshToken) setSession(data.token, data.refreshToken)
+  } catch { /* no body: keep the current session */ }
 
   markUpgraded(username)
   return master

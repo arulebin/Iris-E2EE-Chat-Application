@@ -93,6 +93,16 @@ describe('session refresh', () => {
     expect(expiredEvents).toBe(0)
   })
 
+  it.each([500, 502, 503, 400])('stays logged in on a %i from refresh', async (status) => {
+    const t = jwt(-10)
+    setSession(t, 'r1')
+    respond = () => new Response('x', { status })
+    await expect(refreshAccessToken()).rejects.toThrow()
+    expect(getAccessToken()).toBe(t)
+    expect(getRefreshToken()).toBe('r1')
+    expect(expiredEvents).toBe(0)
+  })
+
   it('on 409 (rotated by another tab) adopts the newer stored token', async () => {
     vi.useFakeTimers()
     setSession(jwt(-10), 'r1')

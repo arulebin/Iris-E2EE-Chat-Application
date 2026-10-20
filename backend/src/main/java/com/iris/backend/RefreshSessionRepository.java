@@ -28,6 +28,12 @@ public interface RefreshSessionRepository extends JpaRepository<RefreshSession, 
     int revokeDevice(@Param("username") String username, @Param("deviceId") int deviceId, @Param("now") Instant now);
 
     @Modifying
-    @Query("DELETE FROM RefreshSession s WHERE s.expiresAt < :cutoff")
-    int deleteExpiredBefore(@Param("cutoff") Instant cutoff);
+    @Query("UPDATE RefreshSession s SET s.revokedAt = :now, s.revokeReason = :reason "
+         + "WHERE s.username = :username AND s.revokedAt IS NULL")
+    int revokeAllForUser(@Param("username") String username, @Param("now") Instant now, @Param("reason") String reason);
+
+    // Live sessions are never purged; dead ones are kept a while for reuse detection.
+    @Modifying
+    @Query("DELETE FROM RefreshSession s WHERE s.revokedAt IS NOT NULL AND s.revokedAt < :cutoff")
+    int deleteRevokedBefore(@Param("cutoff") Instant cutoff);
 }

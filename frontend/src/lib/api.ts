@@ -14,7 +14,7 @@ const REFRESH_KEY = "iris-refresh-token";
 const DEVICE_KEY = "iris-session-device";
 export const AUTH_EXPIRED_EVENT = "iris:auth-expired";
 
-/** The login is over (refresh token missing, expired, revoked or reused). */
+/** The login is over (refresh token missing, revoked or reused). */
 export class AuthExpiredError extends Error {
   constructor() {
     super("Your session has expired — please log in again");
@@ -96,7 +96,7 @@ async function doRefresh(accessBefore: string | null): Promise<string> {
       if (latest && latest !== accessBefore && isFresh(latest)) return latest;
       continue;
     }
-    if (res.status === 401 || res.status === 400) expire();
+    if (res.status === 401) expire(); // the only definitive "no"; 5xx/400/offline never log out
     throw new Error(`Session refresh failed (${res.status})`);
   }
   throw new Error("Session refresh failed");
@@ -163,6 +163,6 @@ export async function logoutSession(): Promise<void> {
       keepalive: true,
     });
   } catch {
-    // offline: the token simply expires
+    // offline: the server-side session stays until revoked; local state is already gone
   }
 }

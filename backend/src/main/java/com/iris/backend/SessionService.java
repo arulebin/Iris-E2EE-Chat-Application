@@ -1,6 +1,6 @@
 package com.iris.backend;
 
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,11 +17,15 @@ import java.util.HexFormat;
 import java.util.UUID;
 
 /**
- * Long-lived logins without long-lived bearer tokens. The access JWT stays short
- * (jwt.expiration-ms, 1 h); the client trades a rotating refresh token for a new
- * one. Refresh tokens are opaque random strings, stored only as SHA-256 hashes,
- * and revocable per login (logout), per device (device removal) or per family
- * (reuse of a rotated token = theft).
+ * Logins that last until the user ends them (like WhatsApp), without long-lived
+ * bearer tokens. The access JWT stays short (jwt.expiration-ms, 1 h); the client
+ * silently trades a rotating refresh token for a new one. Refresh tokens are opaque
+ * random strings, stored only as SHA-256 hashes, and never expire by time. A login
+ * ends only on:
+ *   - logout                 (that login's family)
+ *   - device removal         (sessions bound to that Signal device)
+ *   - credential change      (every login of the account)
+ *   - reuse of a rotated token outside the race window (that family: theft)
  */
 @Service
 public class SessionService {
@@ -29,26 +33,29 @@ public class SessionService {
     static final String ROTATED = "ROTATED";
     static final String LOGOUT = "LOGOUT";
     static final String REUSE = "REUSE";
+    static final String CREDENTIAL = "CREDENTIAL";
 
     // Two tabs (or a retry after a dropped response) can present the same token
     // moments apart. Inside this window that's a benign race, not theft.
     static final Duration ROTATION_GRACE = Duration.ofSeconds(20);
 
+    // Revoked/rotated-out rows are only needed to recognise a reused token. After
+    // this long they're purged; a token that old then simply reads as unknown (401).
+    static final Duration REVOKED_RETENTION = Duration.ofDays(30);
+
     private final RefreshSessionRepository sessions;
     private final DeviceRepository devices;
-    private final Duration ttl;
     private final Clock clock;
     private final SecureRandom random = new SecureRandom();
 
-    public SessionService(RefreshSessionRepository sessions, DeviceRepository devices,
-                          @Value("${auth.refresh-ttl-days:30}") long ttlDays) {
-        this(sessions, devices, Duration.ofDays(ttlDays), Clock.systemUTC());
+    @Autowired
+    public SessionService(RefreshSessionRepository sessions, DeviceRepository devices) {
+        this(sessions, devices, Clock.systemUTC());
     }
 
-    SessionService(RefreshSessionRepository sessions, DeviceRepository devices, Duration ttl, Clock clock) {
+    SessionService(RefreshSessionRepository sessions, DeviceRepository devices, Clock clock) {
         this.sessions = sessions;
         this.devices = devices;
-        this.ttl = ttl;
         this.clock = clock;
     }
 
@@ -77,7 +84,6 @@ public class SessionService {
             if (ROTATED.equals(current.getRevokeReason())) sessions.revokeFamily(current.getFamilyId(), now, REUSE);
             throw new InvalidRefreshException();
         }
-        if (!current.getExpiresAt().isAfter(now)) throw new InvalidRefreshException();
 
         // Bind the login to its Signal device the first time the client reports it,
         // so removing that device also ends this login.
@@ -106,18 +112,27 @@ public class SessionService {
         sessions.revokeDevice(username, deviceId, clock.instant());
     }
 
-    // Expired rows are useless (even for reuse detection — the token is dead anyway).
+    /**
+     * The account's credential changed: every existing login ends. The device that
+     * made the change gets a fresh family so it isn't logged out by its own action.
+     */
+    @Transactional
+    public String revokeAllAndReissue(String username) {
+        sessions.revokeAllForUser(username, clock.instant(), CREDENTIAL);
+        return issue(username);
+    }
+
     @Scheduled(fixedDelayString = "PT6H", initialDelayString = "PT5M")
     @Transactional
-    public void purgeExpired() {
-        sessions.deleteExpiredBefore(clock.instant().minus(Duration.ofDays(1)));
+    public void purgeRevoked() {
+        sessions.deleteRevokedBefore(clock.instant().minus(REVOKED_RETENTION));
     }
 
     private String create(String username, String familyId, Integer deviceId) {
         byte[] raw = new byte[32];
         random.nextBytes(raw);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
-        sessions.save(new RefreshSession(username, hash(token), familyId, deviceId, clock.instant().plus(ttl)));
+        sessions.save(new RefreshSession(username, hash(token), familyId, deviceId));
         return token;
     }
 
@@ -133,7 +148,7 @@ public class SessionService {
     public record Rotated(String username, String refreshToken) { }
 
     public static class InvalidRefreshException extends RuntimeException {
-        public InvalidRefreshException() { super("Session expired — log in again"); }
+        public InvalidRefreshException() { super("Session ended — log in again"); }
     }
 
     public static class RefreshRaceException extends RuntimeException {
