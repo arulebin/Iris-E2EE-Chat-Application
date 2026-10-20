@@ -1,0 +1,26 @@
+{
+  "name": "@iris/core",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "description": "Platform-neutral Iris logic (crypto, Signal protocol, stores, API) shared by the web and React Native apps.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fflate": "0.8.3"
+  },
+  "devDependencies": {
+    "@privacyresearch/libsignal-protocol-typescript": "0.0.16",
+    "@types/node": "24.12.2",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}

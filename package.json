@@ -1,0 +1,14 @@
+{
+  "name": "iris",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "description": "Iris monorepo: shared TypeScript core + React Native app. The web app (frontend/) joins the workspace in phase 2 of docs/mobile-architecture.md.",
+  "workspaces": [
+    "packages/*",
+    "mobile"
+  ],
+  "scripts": {
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}
