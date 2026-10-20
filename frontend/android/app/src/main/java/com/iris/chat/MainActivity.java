@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(ScreenSecurityPlugin.class);
+        registerPlugin(KeystorePlugin.class);
         super.onCreate(savedInstanceState);
         // Secure by default from the first frame (splash + recents thumbnail),
         // before the web layer has loaded. lib/screenSecurity.ts clears it if

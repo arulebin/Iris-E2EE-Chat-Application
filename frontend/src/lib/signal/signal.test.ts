@@ -7,6 +7,7 @@ import { decryptFromDevice, encryptForDevice, IdentityMismatchError, pad, startS
 import type { BundleDto } from './api'
 import { formatRecoveryKey, openBackup, parseRecoveryKey, sealBackup } from '../backup'
 import { mergeHistory } from '../messageStore'
+import { KeystoreKeyMissingError, type KeyWrapper } from '../nativeKeystore'
 import type { ChatMessage } from '../../types'
 
 type Device = { store: SignalStore; kv: KV; deviceId: number; bundle: () => Promise<BundleDto> }
@@ -137,6 +138,98 @@ describe('at-rest encryption', () => {
     expect(asText.includes(Array.from(priv.slice(0, 16)).join(','))).toBe(false)
   })
 })
+
+/** Stand-in for the Android Keystore: an in-memory AES key that can be "lost". */
+function fakeKeystore() {
+  let key: CryptoKey | null = null
+  const ensure = async () =>
+    (key ??= await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']))
+  const wrapper: KeyWrapper & { lose(): void; resets: number } = {
+    resets: 0,
+    async wrap(raw) {
+      const iv = crypto.getRandomValues(new Uint8Array(12))
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, await ensure(), new Uint8Array(raw)))
+      return b64(new Uint8Array([...iv, ...ct]).buffer)
+    },
+    async unwrap(wrapped) {
+      if (!key) throw new KeystoreKeyMissingError('gone')
+      const packed = Uint8Array.from(atob(wrapped), c => c.charCodeAt(0))
+      return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: packed.slice(0, 12) }, key, packed.slice(12)))
+    },
+    async reset() { key = null; wrapper.resets++ },
+    lose() { key = null },
+  }
+  return wrapper
+}
+
+describe('Android Keystore storage key', () => {
+  it('stores only a wrapped key, never a CryptoKey', async () => {
+    const kv = memoryKV()
+    const store = new SignalStore('ks1', kv, fakeKeystore())
+    await store.setDevice({ deviceId: 1, registrationId: 7, nextPreKeyId: 1, signedPreKeys: [] })
+    expect(typeof (await kv.get('sig:ks1:skw'))).toBe('string')
+    expect(await kv.get('sig:ks1:sk')).toBeUndefined()
+    expect((await store.getDevice())?.registrationId).toBe(7)
+  })
+
+  it('migrates a pre-Keystore install and keeps every value readable', async () => {
+    const kv = memoryKV()
+    const id = await KeyHelper.generateIdentityKeyPair()
+    const web = new SignalStore('ks2', kv, null)
+    await web.setIdentityKeyPair(id)
+    await web.setDevice({ deviceId: 3, registrationId: 42, nextPreKeyId: 9, signedPreKeys: [] })
+    expect(await kv.get('sig:ks2:sk')).toBeDefined()
+
+    const keystore = fakeKeystore()
+    const native = new SignalStore('ks2', memoryKVView(kv), keystore)  // fresh key cache, same data
+    expect((await native.getDevice())?.registrationId).toBe(42)
+    expect(bytesOf((await native.getIdentityKeyPair())!.privKey)).toEqual(bytesOf(id.privKey))
+    expect(await kv.get('sig:ks2:sk')).toBeUndefined()
+    expect(typeof (await kv.get('sig:ks2:skw'))).toBe('string')
+  })
+
+  it('resumes an interrupted migration without losing values', async () => {
+    const kv = memoryKV()
+    const web = new SignalStore('ks3', kv, null)
+    await web.setDevice({ deviceId: 1, registrationId: 5, nextPreKeyId: 1, signedPreKeys: [] })
+    await web.setIdentityKeyPair(await KeyHelper.generateIdentityKeyPair())
+    const keystore = fakeKeystore()
+
+    // First run dies right after migrating the first value.
+    const flaky = memoryKVView(kv)
+    let sets = 0
+    const crashing: KV = { ...flaky, set: async (k, v) => { if (++sets === 3) throw new Error('crash'); return flaky.set(k, v) } }
+    await expect(new SignalStore('ks3', crashing, keystore).getDevice()).rejects.toThrow('crash')
+    expect(await kv.get('sig:ks3:sk')).toBeDefined()   // old key kept until the end
+
+    const again = new SignalStore('ks3', memoryKVView(kv), keystore)
+    expect((await again.getDevice())?.registrationId).toBe(5)
+    expect(await again.getIdentityKeyPair()).toBeDefined()
+    expect(await kv.get('sig:ks3:sk')).toBeUndefined()
+  })
+
+  it('starts over when the Keystore key is lost, and wipe() resets it', async () => {
+    const kv = memoryKV()
+    const keystore = fakeKeystore()
+    await new SignalStore('ks4', kv, keystore).setDevice({ deviceId: 1, registrationId: 5, nextPreKeyId: 1, signedPreKeys: [] })
+    keystore.lose()
+    const after = new SignalStore('ks4', memoryKVView(kv), keystore)
+    expect(await after.getDevice()).toBeUndefined()   // old state unreadable → cleared, not crashing
+    await after.setDevice({ deviceId: 2, registrationId: 6, nextPreKeyId: 1, signedPreKeys: [] })
+    expect((await after.getDevice())?.deviceId).toBe(2)
+
+    await after.wipe()
+    expect(keystore.resets).toBe(1)
+    expect(await kv.keys('sig:ks4:')).toEqual([])
+  })
+})
+
+/** Same underlying data, new KV identity — so the store's per-KV key cache starts cold (like an app restart). */
+function memoryKVView(kv: KV): KV {
+  return { get: k => kv.get(k), set: (k, v) => kv.set(k, v), del: k => kv.del(k), keys: p => kv.keys(p) }
+}
+
+const bytesOf = (b: ArrayBuffer) => Array.from(new Uint8Array(b))
 
 describe('padding', () => {
   it('round-trips and hides the exact length', () => {
