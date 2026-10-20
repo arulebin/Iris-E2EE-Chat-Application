@@ -458,6 +458,77 @@ export async function decryptMessage(
   return new TextDecoder().decode(ptBuffer)
 }
 
+// ── helpers for the Signal-protocol layer (lib/signal) ─────────────
+
+export const toBase64 = uint8ToBase64
+export const fromBase64 = base64ToUint8
+
+/**
+ * Wrap arbitrary secret bytes under a KEK derived from the login master secret.
+ * `info` domain-separates each use (the RSA backup uses 'iris-kek-v2'), so the
+ * same password never yields the same key for two different secrets.
+ * Returns { wrapped: base64(iv ‖ ct), salt: base64 }.
+ */
+export async function wrapWithMaster(
+  master: CryptoKey, plaintext: Uint8Array<ArrayBuffer>, info: string,
+): Promise<{ wrapped: string; salt: string }> {
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES))
+  const kek = await crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode(info) },
+    master, AES_PARAMS, false, ['encrypt'],
+  )
+  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, kek, plaintext)
+  const packed = new Uint8Array(iv.length + ct.byteLength)
+  packed.set(iv, 0)
+  packed.set(new Uint8Array(ct), iv.length)
+  return { wrapped: uint8ToBase64(packed), salt: uint8ToBase64(salt) }
+}
+
+/** Inverse of wrapWithMaster. Throws OperationError for a wrong password / tampered blob. */
+export async function unwrapWithMaster(
+  master: CryptoKey, wrappedB64: string, saltB64: string, info: string,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const kek = await crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: base64ToUint8(saltB64), info: new TextEncoder().encode(info) },
+    master, AES_PARAMS, false, ['decrypt'],
+  )
+  const packed = base64ToUint8(wrappedB64)
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: packed.slice(0, IV_BYTES) }, kek, packed.slice(IV_BYTES))
+  return new Uint8Array(pt)
+}
+
+const PSS_PARAMS: RsaHashedImportParams = { name: 'RSA-PSS', hash: 'SHA-256' }
+const PSS_SALT_LENGTH = 32
+
+/**
+ * Sign with the account's legacy RSA key (RSA-PSS). The cached CryptoKey is
+ * decrypt-only, so this unwraps the server backup with the master secret, uses
+ * the JWK once, and drops it. Used to cross-sign the new identity key.
+ */
+export async function signWithLegacyKey(master: CryptoKey, token: string, data: Uint8Array<ArrayBuffer>): Promise<string> {
+  const keys = await fetchMyKeys(token)
+  if (!keys.encryptedPrivateKey || !keys.keySalt) throw new Error('No legacy key backup to sign with')
+  const kek = await deriveKek(master, base64ToUint8(keys.keySalt))
+  const jwk = JSON.parse(await unwrapPrivateJwk(keys.encryptedPrivateKey, kek)) as JsonWebKey
+  // Same RSA key, different algorithm: drop the OAEP-specific metadata.
+  const { kty, n, e, d, p, q, dp, dq, qi } = jwk
+  const signKey = await crypto.subtle.importKey('jwk', { kty, n, e, d, p, q, dp, dq, qi }, PSS_PARAMS, false, ['sign'])
+  const sig = await crypto.subtle.sign({ name: 'RSA-PSS', saltLength: PSS_SALT_LENGTH }, signKey, data)
+  return uint8ToBase64(new Uint8Array(sig))
+}
+
+/** Verify a signWithLegacyKey signature against a public RSA JWK. */
+export async function verifyLegacySignature(jwk: JsonWebKey, data: Uint8Array<ArrayBuffer>, sigB64: string): Promise<boolean> {
+  try {
+    const { kty, n, e } = jwk
+    const key = await crypto.subtle.importKey('jwk', { kty, n, e }, PSS_PARAMS, false, ['verify'])
+    return await crypto.subtle.verify({ name: 'RSA-PSS', saltLength: PSS_SALT_LENGTH }, key, base64ToUint8(sigB64), data)
+  } catch {
+    return false
+  }
+}
+
 // ── media (photos / videos / snaps) ────────────────────────────────
 
 /** Bytes AES-GCM adds to a media blob: 12-byte IV + 16-byte auth tag. */

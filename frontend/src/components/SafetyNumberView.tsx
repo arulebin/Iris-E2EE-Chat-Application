@@ -1,13 +1,11 @@
 import { useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import {
-  computeSafetyNumber,
-  fetchPublicJwk,
   formatSafetyNumber,
-  keyFingerprint,
-  loadOwnPublicJwk,
+  loadSafetyNumber,
   setVerified,
   type ContactTrust,
+  type SafetyNumber,
 } from "../lib/fingerprint";
 import { ShieldCheckIcon, XIcon } from "./icons";
 
@@ -20,25 +18,16 @@ type Props = {
   onClose: () => void;
 };
 
-type Loaded = { digits: string; peerFingerprint: string };
-
 export function SafetyNumberView({ me, peer, peerName, token, trust, onClose }: Props) {
-  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  const [loaded, setLoaded] = useState<SafetyNumber | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [mine, theirs] = await Promise.all([
-          loadOwnPublicJwk(me, token),
-          fetchPublicJwk(peer, token),
-        ]);
-        const [digits, peerFingerprint] = await Promise.all([
-          computeSafetyNumber(me, mine, peer, theirs),
-          keyFingerprint(theirs),
-        ]);
-        if (!cancelled) setLoaded({ digits, peerFingerprint });
+        const safety = await loadSafetyNumber(me, peer, token);
+        if (!cancelled) setLoaded(safety);
       } catch (err) {
         console.error("Safety number failed", err);
         if (!cancelled) setError("Couldn't load encryption keys for this chat.");
@@ -83,7 +72,7 @@ export function SafetyNumberView({ me, peer, peerName, token, trust, onClose }: 
         {loaded && (
           <>
             <div className="bg-white p-2 rounded-xl shadow-sm border border-muted-soft">
-              <QRCodeSVG value={`iris-safety:v1:${loaded.digits}`} size={180} fgColor="#5b5bd6" />
+              <QRCodeSVG value={loaded.qrValue} size={180} fgColor="#5b5bd6" />
             </div>
 
             <div className="grid grid-cols-4 gap-x-4 gap-y-1 font-mono text-navy text-base tracking-wider">

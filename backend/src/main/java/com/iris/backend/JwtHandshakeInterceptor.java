@@ -13,9 +13,11 @@ import java.util.Map;
 public class JwtHandshakeInterceptor implements HandshakeInterceptor {
 
     private final JwtService jwtService;
+    private final DeviceRepository deviceRepository;
 
-    public JwtHandshakeInterceptor(JwtService jwtService) {
+    public JwtHandshakeInterceptor(JwtService jwtService, DeviceRepository deviceRepository) {
         this.jwtService = jwtService;
+        this.deviceRepository = deviceRepository;
     }
 
     @Override
@@ -24,16 +26,33 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
                                    WebSocketHandler wsHandler,
                                    Map<String, Object> attributes) {
 
-        String token = extractToken(request.getURI());
+        String token = queryParam(request.getURI(), "token");
         if (token == null) return false;        // no token → reject
 
+        String username;
         try {
-            String username = jwtService.extractUsername(token);  // throws if invalid
-            attributes.put("username", username);                 // remember on the session
-            return true;                                          // accept handshake
+            username = jwtService.extractUsername(token);  // throws if invalid
         } catch (Exception e) {
-            return false;                                         // bad/expired token → reject
+            return false;                                  // bad/expired token → reject
         }
+        attributes.put("username", username);              // remember on the session
+
+        // Optional Signal-protocol device id. A device that was removed still gets
+        // its socket (so it can be told), but is flagged and receives no envelopes.
+        String device = queryParam(request.getURI(), "device");
+        if (device != null) {
+            try {
+                int deviceId = Integer.parseInt(device);
+                if (deviceRepository.existsByUsernameAndDeviceId(username, deviceId)) {
+                    attributes.put("deviceId", deviceId);
+                } else {
+                    attributes.put("deviceRevoked", Boolean.TRUE);
+                }
+            } catch (NumberFormatException e) {
+                return false;
+            }
+        }
+        return true;                                       // accept handshake
     }
 
     @Override
@@ -42,12 +61,12 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
         // nothing to do
     }
 
-    private String extractToken(URI uri) {
+    private String queryParam(URI uri, String name) {
         String query = uri.getQuery();
         if (query == null) return null;
         for (String pair : query.split("&")) {
             String[] kv = pair.split("=", 2);
-            if (kv.length == 2 && "token".equals(kv[0])) {
+            if (kv.length == 2 && name.equals(kv[0])) {
                 return kv[1];
             }
         }

@@ -45,7 +45,25 @@ public class Message {
 
     private Instant readAt;
 
+    // null/1 = legacy: `content` is AES-GCM ciphertext with the key RSA-wrapped for
+    // both parties, readable from the server forever by either account key.
+    // 2 = Signal protocol: `content` is empty; per-device ciphertexts live in
+    // message_envelopes until delivered, so this row is metadata only.
+    private Integer protocolVersion;
+
+    // Sending device for v2 messages — recipients need it to pick the session.
+    private Integer senderDeviceId;
+
     protected Message(){ }
+
+    /** Metadata row for a v2 message; the content travels in per-device envelopes. */
+    static Message v2(String sender, int senderDeviceId, String recipient,
+                      String mediaId, String mimeType, boolean viewOnce, Long replyToId) {
+        Message m = new Message(sender, recipient, "", null, null, mediaId, mimeType, viewOnce, replyToId);
+        m.protocolVersion = 2;
+        m.senderDeviceId = senderDeviceId;
+        return m;
+    }
 
     public Message(String sender, String recipient, String content,
                String encryptedKeyForSender, String encryptedKeyForRecipient,
@@ -78,4 +96,6 @@ public class Message {
     public Long getReplyToId() { return replyToId; }
     public Instant getReadAt() { return readAt; }
     public void setReadAt(Instant readAt) { this.readAt = readAt; }
+    public int getProtocolVersion() { return protocolVersion == null ? 1 : protocolVersion; }
+    public Integer getSenderDeviceId() { return senderDeviceId; }
 }

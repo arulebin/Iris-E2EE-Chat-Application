@@ -8,10 +8,13 @@ import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -20,13 +23,18 @@ import java.util.concurrent.CopyOnWriteArraySet;
 @Component
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
+    // Base64 of one Signal ciphertext. Text + media envelopes are far below this.
+    private static final int MAX_ENVELOPE_CHARS = 256 * 1024;
+
     private final MessageRepository messageRepository;
     private final ObjectMapper objectMapper;
     private final PushNotificationService pushNotificationService;
     private final UserStatusService userStatusService;
     private final FriendRequestRepository friendRequestRepository;
+    private final SignalKeyService signalKeys;
+    private final EnvelopeService envelopes;
 
-    // username → that user's open sessions (could be multiple tabs)
+    // username → that user's open sessions (could be multiple tabs/devices)
     private final Map<String, Set<WebSocketSession>> sessionsByUser = new ConcurrentHashMap<>();
 
     public ChatWebSocketHandler(
@@ -34,13 +42,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             ObjectMapper objectMapper,
             PushNotificationService pushNotificationService,
             UserStatusService userStatusService,
-            FriendRequestRepository friendRequestRepository
+            FriendRequestRepository friendRequestRepository,
+            SignalKeyService signalKeys,
+            EnvelopeService envelopes
     ) {
         this.messageRepository = messageRepository;
         this.objectMapper = objectMapper;
         this.pushNotificationService = pushNotificationService;
         this.userStatusService = userStatusService;
         this.friendRequestRepository = friendRequestRepository;
+        this.signalKeys = signalKeys;
+        this.envelopes = envelopes;
     }
 
     // Only accepted friends may message, call, or see each other's typing/read state.
@@ -49,14 +61,25 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         return friendRequestRepository.existsAcceptedBetween(a, b);
     }
 
+    private static Integer deviceIdOf(WebSocketSession s) {
+        return (Integer) s.getAttributes().get("deviceId");
+    }
+
     @Override
-    public void afterConnectionEstablished(WebSocketSession session) {
+    public void afterConnectionEstablished(WebSocketSession session) throws IOException {
         String username = (String) session.getAttributes().get("username");
         session.getAttributes().put("visible", Boolean.TRUE);
         sessionsByUser
             .computeIfAbsent(username, k -> new CopyOnWriteArraySet<>())
             .add(session);
         userStatusService.markOnline(username);
+
+        if (Boolean.TRUE.equals(session.getAttributes().get("deviceRevoked"))) {
+            session.sendMessage(new TextMessage("{\"type\":\"device-revoked\"}"));
+            return;
+        }
+        Integer deviceId = deviceIdOf(session);
+        if (deviceId != null) signalKeys.touch(username, deviceId);
     }
 
     @Override
@@ -82,6 +105,26 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         if ("visibility".equals(type)) {
             boolean visible = root.has("state") && "visible".equals(root.get("state").asText());
             session.getAttributes().put("visible", visible);
+            return;
+        }
+
+        // v2: the client asks for its queued envelopes once its Signal store is ready,
+        // so nothing is pushed at a device that can't decrypt (and ack) yet.
+        if ("sync".equals(type)) {
+            Integer deviceId = deviceIdOf(session);
+            if (deviceId == null) return;
+            for (EnvelopeService.Pending p : envelopes.pendingFor(sender, deviceId)) {
+                session.sendMessage(new TextMessage(envelopeFrame(p.envelope(), p.message())));
+            }
+            return;
+        }
+
+        if ("ack".equals(type)) {
+            Integer deviceId = deviceIdOf(session);
+            if (deviceId == null || !root.has("ids") || !root.get("ids").isArray()) return;
+            List<Long> ids = new ArrayList<>();
+            root.get("ids").forEach(n -> { if (n.canConvertToLong()) ids.add(n.asLong()); });
+            envelopes.ack(ids, sender, deviceId);
             return;
         }
 
@@ -119,11 +162,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             ObjectNode forwarded = ((ObjectNode) root).put("from", sender);
             if ("call-offer".equals(type)) {
                 sendToOneSession(to, forwarded.toString());
-                Set<WebSocketSession> recipientSessions = sessionsByUser.getOrDefault(to, Set.of());
-                boolean recipientActive = recipientSessions.stream()
-                    .anyMatch(s -> s.isOpen()
-                        && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE)));
-                if (!recipientActive) {
+                if (!isActive(to)) {
                     // Generic text: push payloads pass through the browser vendor's push service.
                     pushNotificationService.sendToUser(to, "Iris", "Incoming call", true);
                 }
@@ -138,6 +177,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         if (incoming.to() == null || incoming.to().isBlank()) return;
         if (!areFriends(sender, incoming.to())) return;
+
+        if (incoming.isV2()) {
+            handleV2(session, sender, incoming);
+            return;
+        }
+
+        // ── legacy (v1, RSA-wrapped) message ──
+        // TODO(remove-legacy): once every client has a Signal device, drop this
+        // branch and reject v1 sends; history stays readable via MessageController.
         boolean hasText = incoming.content() != null && !incoming.content().isBlank();
         boolean hasMedia = incoming.mediaId() != null && !incoming.mediaId().isBlank();
         if (!hasText && !hasMedia) return;
@@ -152,35 +200,141 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             incoming.replyToId()
         ));
 
-        OutgoingMessage out = toOutgoing(saved);
-        String payload = objectMapper.writeValueAsString(out);
+        String payload = objectMapper.writeValueAsString(toOutgoing(saved));
 
         java.util.Set<String> targets = new java.util.HashSet<>();
         targets.add(incoming.to());
         targets.add(sender);
         for (String username : targets) sendToUser(username, payload);
 
-        Set<WebSocketSession> recipientSessions = sessionsByUser.getOrDefault(incoming.to(), Set.of());
-        boolean recipientActive = recipientSessions.stream()
-            .anyMatch(s -> s.isOpen()
-                && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE)));
-        if (!recipientActive) {
+        if (!isActive(incoming.to())) {
             // Generic text: push payloads pass through the browser vendor's push service.
             pushNotificationService.sendToUser(incoming.to(), "Iris", "New message");
         }
     }
 
+    /**
+     * v2 (Signal protocol): the client sends one ciphertext per target device. The
+     * server checks the fan-out against the device registry (refusing with the
+     * missing/extra devices if the client's view is stale), stores metadata + the
+     * envelopes atomically, and delivers each envelope only to its own device.
+     */
+    private void handleV2(WebSocketSession session, String sender, IncomingMessage incoming) throws IOException {
+        String clientId = incoming.clientId();
+        Integer senderDeviceId = deviceIdOf(session);
+        if (senderDeviceId == null) {
+            sendError(session, clientId, "no-device", null);
+            return;
+        }
+        List<IncomingMessage.Envelope> provided = incoming.envelopes() == null ? List.of() : incoming.envelopes();
+        for (IncomingMessage.Envelope e : provided) {
+            if (e.user() == null || e.deviceId() == null || e.body() == null || e.body().length() > MAX_ENVELOPE_CHARS
+                    || e.type() == null || (e.type() != 1 && e.type() != 3)) {
+                sendError(session, clientId, "bad-envelope", null);
+                return;
+            }
+        }
+
+        List<Integer> recipientDevices = signalKeys.deviceIds(incoming.to());
+        if (recipientDevices.isEmpty()) {
+            // Recipient has no Signal devices — the client falls back to a v1 send.
+            sendError(session, clientId, "recipient-not-v2", null);
+            return;
+        }
+        Set<EnvelopeFanout.Address> expected = EnvelopeFanout.expectedTargets(
+            sender, senderDeviceId, signalKeys.deviceIds(sender), incoming.to(), recipientDevices);
+        EnvelopeFanout.Result fanout = EnvelopeFanout.check(expected,
+            provided.stream().map(e -> new EnvelopeFanout.Address(e.user(), e.deviceId())).toList());
+        if (!fanout.ok()) {
+            sendError(session, clientId, "device-mismatch", fanout);
+            return;
+        }
+
+        boolean hasMedia = incoming.mediaId() != null && !incoming.mediaId().isBlank();
+        EnvelopeService.Stored stored = envelopes.saveV2(
+            Message.v2(sender, senderDeviceId, incoming.to(),
+                hasMedia ? incoming.mediaId() : null,
+                hasMedia ? incoming.mimeType() : null,
+                hasMedia && incoming.viewOnceFlag(),
+                incoming.replyToId()),
+            provided);
+
+        for (MessageEnvelope env : stored.envelopes()) {
+            sendToDevice(env.getTargetUser(), env.getTargetDeviceId(), envelopeFrame(env, stored.message()));
+        }
+
+        ObjectNode sent = objectMapper.createObjectNode();
+        sent.put("type", "sent");
+        sent.put("clientId", clientId);
+        sent.set("message", objectMapper.valueToTree(toOutgoing(stored.message())));
+        session.sendMessage(new TextMessage(sent.toString()));
+
+        if (!isActive(incoming.to())) {
+            pushNotificationService.sendToUser(incoming.to(), "Iris", "New message");
+        }
+    }
+
+    private String envelopeFrame(MessageEnvelope env, Message message) {
+        ObjectNode frame = objectMapper.createObjectNode();
+        frame.put("type", "envelope");
+        frame.put("envelopeId", env.getId());
+        frame.put("envType", env.getType());
+        frame.put("body", env.getBody());
+        frame.set("message", objectMapper.valueToTree(toOutgoing(message)));
+        return frame.toString();
+    }
+
+    private void sendError(WebSocketSession session, String clientId, String reason, EnvelopeFanout.Result fanout)
+            throws IOException {
+        ObjectNode err = objectMapper.createObjectNode();
+        err.put("type", "send-error");
+        err.put("clientId", clientId);
+        err.put("reason", reason);
+        if (fanout != null) {
+            err.set("missing", addresses(fanout.missing()));
+            List<EnvelopeFanout.Address> extra = new ArrayList<>(fanout.extra());
+            extra.addAll(fanout.duplicates());
+            err.set("extra", addresses(extra));
+        }
+        session.sendMessage(new TextMessage(err.toString()));
+    }
+
+    private ArrayNode addresses(List<EnvelopeFanout.Address> list) {
+        ArrayNode arr = objectMapper.createArrayNode();
+        for (EnvelopeFanout.Address a : list) {
+            ObjectNode n = objectMapper.createObjectNode();
+            n.put("user", a.user());
+            n.put("deviceId", a.deviceId());
+            arr.add(n);
+        }
+        return arr;
+    }
+
+    /** Called after a device is removed: tell its open sockets, then drop them. */
+    public void revokeDevice(String username, int deviceId) {
+        Set<WebSocketSession> userSessions = sessionsByUser.get(username);
+        if (userSessions == null) return;
+        for (WebSocketSession s : userSessions) {
+            Integer d = deviceIdOf(s);
+            if (d != null && d == deviceId && s.isOpen()) {
+                try {
+                    s.sendMessage(new TextMessage("{\"type\":\"device-revoked\"}"));
+                    s.close(CloseStatus.POLICY_VIOLATION);
+                } catch (IOException ignored) {
+                    // socket already gone
+                }
+            }
+        }
+    }
+
+    private boolean isActive(String username) {
+        return sessionsByUser.getOrDefault(username, Set.of()).stream()
+            .anyMatch(s -> s.isOpen()
+                && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE)));
+    }
+
     static OutgoingMessage toOutgoing(Message m) {
-        return new OutgoingMessage(
-            m.getId(),
-            m.getSender(), m.getRecipient(), m.getContent(),
-            m.getEncryptedKeyForSender(), m.getEncryptedKeyForRecipient(),
-            m.getMediaId(), m.getMimeType(),
-            m.isViewOnce(), m.getViewedAt(),
-            m.getSentAt(),
-            m.getReplyToId(),
-            m.getReadAt()
-        );
+        return OutgoingMessage.of(m);
     }
 
     private void sendToUser(String username, String payload) throws IOException {
@@ -188,6 +342,17 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         if (userSessions == null) return;
         for (WebSocketSession s : userSessions) {
             if (s.isOpen()) s.sendMessage(new TextMessage(payload));
+        }
+    }
+
+    // A device may be open in more than one tab; every tab of that device gets it,
+    // and they converge because the first ack deletes the envelope server-side.
+    private void sendToDevice(String username, int deviceId, String payload) throws IOException {
+        Set<WebSocketSession> userSessions = sessionsByUser.get(username);
+        if (userSessions == null) return;
+        for (WebSocketSession s : userSessions) {
+            Integer d = deviceIdOf(s);
+            if (d != null && d == deviceId && s.isOpen()) s.sendMessage(new TextMessage(payload));
         }
     }
 
