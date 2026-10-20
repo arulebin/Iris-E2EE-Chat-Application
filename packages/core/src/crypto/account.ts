@@ -31,6 +31,19 @@ export type Credentials = {
   master: MasterKey   // HKDF-only handle (web: non-extractable CryptoKey); never leaves the device
 }
 
+// Which authSalt each master secret was derived with (needed to tag local escrow blobs).
+const masterSalts = new WeakMap<MasterKey, string>()
+export const saltOfMaster = (master: MasterKey): string | null => masterSalts.get(master) ?? null
+
+const authSaltCacheKey = (username: string) => `iris-authsalt:${username}`
+/** The account's authSalt as last seen on this device (not secret); lets the password unlock local data offline. */
+export function cachedAuthSalt(username: string): string | null {
+  try { return getPlatform().flags.getItem(authSaltCacheKey(username)) } catch { return null }
+}
+export function cacheAuthSalt(username: string, authSalt: string): void {
+  try { getPlatform().flags.setItem(authSaltCacheKey(username), authSalt) } catch { /* ignore */ }
+}
+
 export function newSalt(): string {
   return toBase64(getPlatform().crypto.randomBytes(SALT_BYTES))
 }
@@ -40,6 +53,7 @@ export async function deriveCredentials(password: string, authSaltB64: string): 
   const masterBits = await p.crypto.pbkdf2('SHA-256', utf8(password), fromBase64(authSaltB64), PBKDF2_ITERATIONS, 32)
   const master = await p.masterKeys.create(masterBits)
   masterBits.fill(0)
+  masterSalts.set(master, authSaltB64)
   const authBits = await master.hkdf(new Uint8Array(0), AUTH_INFO, 32)
   return { authKey: toBase64(authBits), master }
 }
@@ -200,6 +214,7 @@ export async function fetchAuthSalt(username: string): Promise<AuthSaltInfo> {
     throw new Error("The server asked for this account's legacy password login, which this device already upgraded. Refusing to send your password.")
   }
   if (info.version >= 2 && !info.authSalt) throw new Error('Server returned no salt for this account')
+  if (info.version >= 2 && info.authSalt) cacheAuthSalt(username, info.authSalt)
   return info
 }
 
@@ -266,6 +281,7 @@ export async function upgradeLegacyAccount(username: string, password: string, t
   } catch { /* no body: keep the current session */ }
 
   markUpgraded(username)
+  cacheAuthSalt(username, authSalt)
   return master
 }
 

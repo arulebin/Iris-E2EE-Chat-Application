@@ -8,6 +8,7 @@ export {
   deriveCredentials, newSalt, ensureKeyPair, markUpgraded, fetchAuthSalt, upgradeLegacyAccount,
   fetchPublicKey, encryptMessage, decryptMessage, wrapWithMaster, unwrapWithMaster,
   signWithLegacyKey, verifyLegacySignature, MEDIA_CRYPTO_OVERHEAD, encryptMediaBytes, decryptMediaBytes,
+  saltOfMaster, cachedAuthSalt, cacheAuthSalt,
 } from './crypto/account.ts'
 export type { Credentials, AuthSaltInfo, EncryptedMessage } from './crypto/account.ts'
 export * from './storage.ts'
@@ -22,6 +23,7 @@ export * from './media.ts'
 export * from './credentials.ts'
 export * from './atRest.ts'
 export * from './appLockLayer.ts'
+export * from './appLockEscrow.ts'
 export * from './messageStore.ts'
 export * from './backup.ts'
 // Safety-number hashing over an explicit CryptoProvider (the pin/TOFU wrappers in

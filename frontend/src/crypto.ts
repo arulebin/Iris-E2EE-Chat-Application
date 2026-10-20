@@ -19,6 +19,9 @@ export {
   MEDIA_CRYPTO_OVERHEAD,
   encryptMediaBytes,
   decryptMediaBytes,
+  saltOfMaster,
+  cachedAuthSalt,
+  cacheAuthSalt,
 } from '@iris/core'
 export type {
   Credentials,

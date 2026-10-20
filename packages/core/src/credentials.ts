@@ -1,4 +1,4 @@
-import { deriveCredentials, fetchAuthSalt, markUpgraded, newSalt, upgradeLegacyAccount } from "./crypto/account.ts";
+import { cacheAuthSalt, deriveCredentials, fetchAuthSalt, markUpgraded, newSalt, upgradeLegacyAccount } from "./crypto/account.ts";
 import type { MasterKey } from "./crypto/keys.ts";
 import { getPlatform } from "./platform.ts";
 
@@ -32,6 +32,7 @@ export async function signUp(username: string, password: string): Promise<Sessio
   if (!res.ok) throw new Error((await res.text()) || "signup failed");
   const token = await postLogin({ username, authKey });
   markUpgraded(username);
+  cacheAuthSalt(username, authSalt);
   return { token, master };
 }
 
@@ -61,4 +62,28 @@ export async function unlockKeyMaterial(username: string, password: string, toke
   const { version, authSalt } = await fetchAuthSalt(username);
   if (version >= 2) return (await deriveCredentials(password, authSalt!)).master;
   return upgradeLegacyAccount(username, password, token);
+}
+
+/**
+ * Check a password against the server WITHOUT touching the session (the login
+ * response is discarded). Returns the master secret derived from it. Used to
+ * make sure a password escrow is made under the real password, not a typo.
+ */
+export async function verifyPassword(username: string, password: string): Promise<MasterKey> {
+  const { version, authSalt } = await fetchAuthSalt(username);
+  if (version < 2) throw new Error("Log out and back in once to upgrade your account first.");
+  const { authKey, master } = await deriveCredentials(password, authSalt!);
+  const { apiBase, fetch: doFetch } = getPlatform();
+  const res = await doFetch(`${apiBase}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, authKey }),
+  });
+  if (res.status === 401 || res.status === 403) {
+    const err = new Error("Wrong password");
+    err.name = "OperationError";
+    throw err;
+  }
+  if (!res.ok) throw new Error((await res.text()) || "Couldn't verify the password");
+  return master;
 }

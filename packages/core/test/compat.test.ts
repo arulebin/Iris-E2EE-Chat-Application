@@ -20,6 +20,10 @@ import {
   openBackup,
   parseMediaEnvelope,
   parseRecoveryKey,
+  openEscrow,
+  sealEscrow,
+  saltOfMaster,
+  type EscrowBlob,
   rsaPrivateFromJwk,
   signWithLegacyKey,
   toBase64,
@@ -169,6 +173,34 @@ describe.each(providers)('legacy web data, %s', (_name, makeProvider) => {
       expect(packed).toBeInstanceOf(Uint8Array)
       expect(JSON.parse(new TextDecoder().decode(await cipher.open('sig:carol:device', packed!))).registrationId).toBe(55)
     })
+  })
+
+  describe('App-lock password escrow (security-hardening format)', () => {
+    // Built with raw WebCrypto straight from the format documented in appLockEscrow.ts:
+    //   key = HKDF(PBKDF2(pw, authSalt), salt, "iris-local-escrow-v1"); AES-GCM, AAD "iris-escrow-v1:<prefix>"
+    async function legacyEscrow(password: string, authSalt: string, prefix: string, raw: Uint8Array): Promise<EscrowBlob> {
+      const subtle = webcrypto.subtle
+      const pw = await subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
+      const masterBits = await subtle.deriveBits({ name: 'PBKDF2', salt: fromBase64(authSalt), iterations: 600_000, hash: 'SHA-256' }, pw, 256)
+      const master = await subtle.importKey('raw', masterBits, 'HKDF', false, ['deriveKey'])
+      const salt = new Uint8Array(16).fill(4), iv = new Uint8Array(12).fill(6)
+      const key = await subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode('iris-local-escrow-v1') }, master, { name: 'AES-GCM', length: 256 }, false, ['encrypt'])
+      const ct = await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(`iris-escrow-v1:${prefix}`) }, key, raw)
+      return { v: 1, as: authSalt, salt: toBase64(salt), iv: toBase64(iv), ct: toBase64(new Uint8Array(ct)) }
+    }
+
+    it('opens an escrow written to the documented format, and writes one the format reader accepts', async () => {
+      setup(makeProvider())
+      const raw = new Uint8Array(32).map((_, i) => i * 7 + 1)
+      const blob = await legacyEscrow('pw', F.credentials.authSalt, 'sig:alice:', raw)
+      const { master } = await deriveCredentials('pw', F.credentials.authSalt)
+      expect(saltOfMaster(master)).toBe(F.credentials.authSalt)
+      expect(await openEscrow(master, 'sig:alice:', blob)).toEqual(raw)
+      await expect(openEscrow(master, 'hist:alice:', blob)).rejects.toThrow('Wrong password')
+      const mine = await sealEscrow(master, F.credentials.authSalt, 'sig:alice:', raw)
+      expect(Object.keys(mine).sort()).toEqual(['as', 'ct', 'iv', 'salt', 'v'])
+      expect(await openEscrow(master, 'sig:alice:', mine)).toEqual(raw)
+    }, 60_000)
   })
 
   describe('backup', () => {

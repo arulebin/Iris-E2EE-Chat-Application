@@ -1,6 +1,15 @@
 import { useEffect, useState } from "react";
 import { Capacitor } from "@capacitor/core";
-import { appLockAvailability, disableAppLock, enableAppLock, type LockAvailability } from "../lib/appLock";
+import {
+  appLockAvailability,
+  disableAppLock,
+  enableAppLock,
+  getEscrowStatus,
+  setupEscrow,
+  type LockAvailability,
+} from "../lib/appLock";
+import { verifyPassword } from "../lib/credentials";
+import type { EscrowStatus } from "../lib/appLockEscrow";
 import {
   AppLockCanceledError,
   getConfig,
@@ -17,6 +26,17 @@ export function AppLockSettings({ me }: { me: string }) {
   const [cfg, setCfg] = useState<AppLockConfig | null>(() => getConfig(me));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Password prompt: needed to turn the lock on (escrow) and to add/refresh the escrow later.
+  const [askPassword, setAskPassword] = useState<null | "enable" | "escrow">(null);
+  const [password, setPassword] = useState("");
+  const [escrow, setEscrow] = useState<EscrowStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!cfg || cfg.mode === "gate") return;
+    void getEscrowStatus(me).then((s) => { if (!cancelled) setEscrow(s); }, () => {});
+    return () => { cancelled = true; };
+  }, [cfg, me]);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,10 +67,13 @@ export function AppLockSettings({ me }: { me: string }) {
 
   async function toggle() {
     setError(null);
+    if (!on) {
+      setAskPassword("enable");   // the password is needed to set up recovery first
+      return;
+    }
     setBusy(true);
     try {
-      if (on) await disableAppLock(me);
-      else await enableAppLock(me, "1m");
+      await disableAppLock(me);
     } catch (err) {
       if (!(err instanceof AppLockCanceledError)) {
         console.warn("[app-lock] toggle failed", err);
@@ -62,6 +85,33 @@ export function AppLockSettings({ me }: { me: string }) {
     }
   }
 
+  async function submitPassword(e: React.FormEvent) {
+    e.preventDefault();
+    if (!askPassword || !password) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const master = await verifyPassword(me, password);
+      if (askPassword === "enable") await enableAppLock(me, "1m", master);
+      else await setupEscrow(me, master);
+      setPassword("");
+      setAskPassword(null);
+    } catch (err) {
+      if (err instanceof AppLockCanceledError) {
+        // dismissed the system prompt: keep the form
+      } else if (err instanceof Error && err.name === "OperationError") {
+        setError("That password isn't right.");
+      } else {
+        console.warn("[app-lock] toggle failed", err);
+        setError("Couldn't change app lock. Check your connection and try again.");
+      }
+    } finally {
+      setCfg(getConfig(me));
+      if (getConfig(me)) void getEscrowStatus(me).then(setEscrow, () => {});
+      setBusy(false);
+    }
+  }
+
   function changeTiming(t: LockTiming) {
     if (cfg) setConfig(me, { ...cfg, timing: t });
   }
@@ -69,7 +119,7 @@ export function AppLockSettings({ me }: { me: string }) {
   let description: string;
   if (native) {
     description =
-      "Require your fingerprint, face or screen lock to open Iris. Your message keys are also locked in the phone's secure hardware, so they can't be used until you authenticate. Adding a new fingerprint resets the lock.";
+      "Require your fingerprint, face or screen lock to open Iris. Your message keys are also locked in the phone's secure hardware, so they can't be used until you authenticate. If your biometrics change or stop working, your Iris password unlocks your messages and you can set the lock up again; nothing is erased.";
   } else if (cfg?.mode === "gate") {
     description =
       "This browser or device doesn't support the passkey feature needed to encrypt with it, so app lock is only a screen lock: it keeps people at your screen out, but does NOT encrypt your local data. Anyone who can read this browser's storage can bypass it.";
@@ -125,6 +175,57 @@ export function AppLockSettings({ me }: { me: string }) {
               ))}
             </div>
           </div>
+        )}
+        {cfg && cfg.mode !== "gate" && escrow && escrow !== "current" && !askPassword && (
+          <div className="bg-bg rounded-xl px-3 py-2 flex items-center justify-between gap-3">
+            <p className="text-xs text-muted leading-snug">
+              {escrow === "stale"
+                ? "Your password changed. Refresh password recovery so it keeps working."
+                : "Password recovery isn't set up. Without it, a change of biometrics erases the local data on this device."}
+            </p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => { setError(null); setAskPassword("escrow"); }}
+              className="shrink-0 text-xs font-bold text-primary"
+            >
+              {escrow === "stale" ? "Refresh" : "Set up"}
+            </button>
+          </div>
+        )}
+        {askPassword && (
+          <form onSubmit={submitPassword} className="flex flex-col gap-2">
+            <p className="text-xs text-muted leading-snug">
+              Enter your Iris password. It never leaves this device here; it protects a recovery copy of your message keys so the password can unlock them if your biometrics fail.
+            </p>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              autoComplete="current-password"
+              autoFocus
+              required
+              className="w-full px-3 py-2 bg-bg border border-muted-soft rounded-xl text-navy text-sm placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                disabled={busy || !password}
+                className="flex-1 bg-primary text-white text-sm font-bold py-2 rounded-xl disabled:opacity-60"
+              >
+                {busy ? "Working…" : askPassword === "enable" ? "Turn on app lock" : "Save"}
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => { setAskPassword(null); setPassword(""); setError(null); }}
+                className="px-4 text-sm font-medium text-muted"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
         )}
         {error && <p className="text-xs text-danger">{error}</p>}
       </div>
