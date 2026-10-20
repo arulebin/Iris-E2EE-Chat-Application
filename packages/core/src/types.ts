@@ -27,6 +27,8 @@ export type ChatMessage = {
   // Client-only: AES key for E2E media, recovered from the decrypted envelope.
   // Absent for legacy (server-encrypted-at-rest) media.
   mediaKey?: string | null;
+  // Client-only: optional hints from the decrypted media envelope (file name, size, pixel size, BlurHash).
+  mediaMeta?: { name?: string; size?: number; w?: number; h?: number; dur?: number; bh?: string } | null;
   viewOnce?: boolean;
   viewedAt?: string | null;
   sentAt: string;

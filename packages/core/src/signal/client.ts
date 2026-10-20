@@ -1,7 +1,7 @@
 import { randomUUID } from '../crypto/util.ts'
 import { decodeGroupPayload, encodeGroupPayload, groupPeer } from '../groups/payload.ts'
 import { encryptGroupFanout, type GroupRecipient } from '../groups/fanout.ts'
-import { parseMediaEnvelope } from '../media.ts'
+import { mediaMetaOf, parseMediaEnvelope } from '../media.ts'
 import { getMessages, upsertMessage } from '../messageStore.ts'
 import { getPlatform } from '../platform.ts'
 import type { ChatMessage } from '../types.ts'
@@ -33,7 +33,9 @@ export type SendExtras = {
 export function toChatMessage(meta: V2Meta, plaintext: string): ChatMessage {
   const base: ChatMessage = { ...meta, content: plaintext, v: 2 }
   const envelope = meta.mediaId ? parseMediaEnvelope(plaintext) : null
-  return envelope ? { ...base, content: envelope.caption, mediaKey: envelope.key, mimeType: envelope.mime } : base
+  return envelope
+    ? { ...base, content: envelope.caption, mediaKey: envelope.key, mimeType: envelope.mime, mediaMeta: mediaMetaOf(envelope) ?? null }
+    : base
 }
 
 // Serialise ratchet work across tabs of the same device: two tabs decrypting the

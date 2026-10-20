@@ -131,6 +131,11 @@ export class HistoryStore {
     return this.mutate(this.v2Slot(peer), list => list.map(m => (match(m) ? { ...m, ...patch } : m)))
   }
 
+  /** Remove messages from the LOCAL copy only ("delete for me"). */
+  deleteMessages(peer: string, match: (m: ChatMessage) => boolean): Promise<void> {
+    return this.mutate(this.v2Slot(peer), list => list.filter(m => !match(m)))
+  }
+
   /**
    * Scan a key prefix for this account's conversations. Usernames aren't
    * restricted, so a prefix like `iris-msgs-v2:bob:` also matches another local
@@ -221,6 +226,8 @@ export const upsertMessage = (me: string, peer: string, msg: ChatMessage) => his
 export const upsertMany = (me: string, peer: string, msgs: ChatMessage[]) => historyFor(me).upsertMany(peer, msgs)
 export const patchMessage = (me: string, peer: string, match: (m: ChatMessage) => boolean, patch: Partial<ChatMessage>) =>
   historyFor(me).patchMessage(peer, match, patch)
+export const deleteMessages = (me: string, peer: string, match: (m: ChatMessage) => boolean) =>
+  historyFor(me).deleteMessages(peer, match)
 export const exportAll = (me: string) => historyFor(me).exportAll()
 export const importAll = (me: string, conversations: Record<string, ChatMessage[]>) => historyFor(me).importAll(conversations)
 export const isEmpty = (me: string) => historyFor(me).isEmpty()
