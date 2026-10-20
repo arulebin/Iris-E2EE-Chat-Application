@@ -19,7 +19,18 @@ public class User {
     private String username;
 
     @Column(nullable = false)
-    private String passwordHash;   // never stores plaintext — we'll hash with BCrypt next step
+    private String passwordHash;   // v1: bcrypt(rawPassword). v2: bcrypt(authKey) — the server never sees the password
+
+    // Salt for the client-side PBKDF2 that splits the password into authKey + KEK.
+    // Null for v1 (legacy) accounts.
+    @Column(length = 64)
+    private String authSalt;
+
+    // 1 = legacy (raw password sent to server, privkey wrapped under PBKDF2(password)).
+    // 2 = client-derived authKey; privkey wrapped under an HKDF-derived KEK the server can't reproduce.
+    // Nullable so ddl-auto=update can add the column to existing rows; null reads as 1.
+    @Column
+    private Integer credentialVersion;
 
     @Column(nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
@@ -52,6 +63,11 @@ public class User {
     public String getShareId() { return shareId; }
     public String getUsername() { return username; }
     public String getPasswordHash() { return passwordHash; }
+    public void setPasswordHash(String passwordHash) { this.passwordHash = passwordHash; }
+    public String getAuthSalt() { return authSalt; }
+    public void setAuthSalt(String authSalt) { this.authSalt = authSalt; }
+    public int getCredentialVersion() { return credentialVersion == null ? 1 : credentialVersion; }
+    public void setCredentialVersion(int credentialVersion) { this.credentialVersion = credentialVersion; }
     public Instant getCreatedAt() { return createdAt; }
     public String getPublicKey() { return publicKey; }
     public void setPublicKey(String publicKey) { this.publicKey = publicKey; }

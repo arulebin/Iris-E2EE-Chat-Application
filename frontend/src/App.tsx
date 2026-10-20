@@ -12,6 +12,7 @@ import { createPeerConnection, type CallSignal } from "./webrtc";
 import { playRingback, playRingtone, stopTone } from "./lib/sound";
 import type { ChatMessage, CallState, CallMode, UserProfile, FriendRequest } from "./types";
 import { getUsername, getTokenExpiryMs, isTokenExpired } from "./lib/auth";
+import { logIn, signUp, unlockKeyMaterial } from "./lib/credentials";
 import { uploadMedia } from "./lib/media";
 import { apiBase, wsURL } from "./lib/config";
 
@@ -44,6 +45,7 @@ function App() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [authBusy, setAuthBusy] = useState(false);
 
   // ── chat state ──────────────────────────────────────────────────
   const [users, setUsers] = useState<UserProfile[]>([]);
@@ -63,6 +65,10 @@ function App() {
   // routes the user to UnlockKeyView instead of a silently-broken session.
   const [needsKeyPassword, setNeedsKeyPassword] = useState(false);
   const [keyError, setKeyError] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+  // In-memory secret (derived from the password at login/unlock) that unwraps the
+  // private-key backup. Never persisted and never sent to the server.
+  const [keyMaterial, setKeyMaterial] = useState<CryptoKey | null>(null);
 
   // ── push / brave state ──────────────────────────────────────────
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -117,30 +123,37 @@ function App() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setAuthBusy(true);
     try {
-      const res = await fetch(`${apiBase}/auth/${mode}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      if (!res.ok) throw new Error((await res.text()) || `${mode} failed`);
-
-      let token: string;
-      if (mode === "signup") {
-        const loginRes = await fetch(`${apiBase}/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, password }),
-        });
-        if (!loginRes.ok) throw new Error("Auto-login after signup failed");
-        token = (await loginRes.json()).token;
-      } else {
-        token = (await res.json()).token;
-      }
-      localStorage.setItem("token", token);
-      setToken(token);
+      // The password stays in the browser: it's stretched into an authKey (sent
+      // to the server) and a separate key-unlock secret (kept in memory).
+      const session = mode === "signup"
+        ? await signUp(username, password)
+        : await logIn(username, password);
+      localStorage.setItem("token", session.token);
+      setKeyMaterial(session.master);
+      setPassword("");
+      setToken(session.token);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setAuthBusy(false);
+    }
+  }
+
+  async function handleUnlock(pw: string) {
+    if (!token || !me) return;
+    setKeyError(null);
+    setUnlocking(true);
+    try {
+      setKeyMaterial(await unlockKeyMaterial(me, pw, token));
+    } catch (err: unknown) {
+      const wrongPassword = err instanceof Error && err.name === "OperationError";
+      setKeyError(wrongPassword
+        ? "That password didn't unlock your messages. Try again."
+        : err instanceof Error ? err.message : "Couldn't unlock your messages");
+    } finally {
+      setUnlocking(false);
     }
   }
 
@@ -152,6 +165,7 @@ function App() {
     setPrivateKey(null);
     setMyPublicKey(null);
     setRecipientPublicKey(null);
+    setKeyMaterial(null);
     setNeedsKeyPassword(false);
     setKeyError(null);
     navigate("/");
@@ -195,13 +209,13 @@ function App() {
     }
   }, [token]);
 
-  // `password` IS a dep: on a persisted-token boot it starts empty, and the
+  // `keyMaterial` IS a dep: on a persisted-token boot it starts null, and the
   // UnlockKeyView sets it later — re-running this effect to unlock the key.
   // Branch 1 (key already in IndexedDB) makes the common reload path a cheap no-op.
   useEffect(() => {
     if (!token || !me) return;
     let cancelled = false;
-    ensureKeyPair(me, password, token)
+    ensureKeyPair(me, keyMaterial, token)
       .then(({ privateKey, publicKey }) => {
         if (cancelled) return;
         setPrivateKey(privateKey);
@@ -222,7 +236,7 @@ function App() {
         }
       });
     return () => { cancelled = true; };
-  }, [token, me, password]);
+  }, [token, me, keyMaterial]);
 
   useEffect(() => {
     if (!token) return;
@@ -787,6 +801,7 @@ function App() {
         username={username}
         password={password}
         error={error}
+        busy={authBusy}
         onUsernameChange={setUsername}
         onPasswordChange={setPassword}
         onSubmit={handleSubmit}
@@ -806,7 +821,8 @@ function App() {
       <UnlockKeyView
         me={me}
         error={keyError}
-        onUnlock={(pw) => { setKeyError(null); setPassword(pw); }}
+        busy={unlocking}
+        onUnlock={handleUnlock}
         onLogout={handleLogout}
       />
     );

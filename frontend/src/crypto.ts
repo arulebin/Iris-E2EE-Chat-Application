@@ -34,13 +34,66 @@ function base64ToUint8(b64: string): Uint8Array<ArrayBuffer> {
   return bytes
 }
 
-// ── password-derived key encryption (for backing up the RSA privkey) ─
+// ── password-derived secrets ───────────────────────────────────────
+//
+// v2 (current): ONE slow PBKDF2 over (password, authSalt) yields a master secret,
+// which HKDF splits into two independent 256-bit outputs:
+//   authKey = HKDF(master, info="iris-auth-v2")             → the login credential the server sees
+//   KEK     = HKDF(master, salt=keySalt, info="iris-kek-v2") → wraps the RSA private-key backup
+// HKDF outputs under different `info` are independent, so knowing authKey tells the
+// server nothing about the KEK — to unwrap the backup it would have to brute-force the
+// password through 600k PBKDF2 rounds per guess.
+//
+// v1 (legacy, migration only): the raw password WAS the login credential and the KEK
+// was PBKDF2(password, keySalt) — so the server could unwrap every backup.
 
-/**
- * Derive a 256-bit AES-GCM key from (password, salt) via PBKDF2-SHA256.
- * The returned key is non-extractable — it can encrypt/decrypt but never leaves Web Crypto.
- */
-async function deriveKek(password: string, salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+const AUTH_INFO = new TextEncoder().encode('iris-auth-v2')
+const KEK_INFO  = new TextEncoder().encode('iris-kek-v2')
+
+export type Credentials = {
+  authKey: string     // base64, sent to the server in place of the password
+  master: CryptoKey   // non-extractable HKDF key; never leaves the browser
+}
+
+export function newSalt(): string {
+  return uint8ToBase64(crypto.getRandomValues(new Uint8Array(SALT_BYTES)))
+}
+
+export async function deriveCredentials(password: string, authSaltB64: string): Promise<Credentials> {
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  )
+  const masterBits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: base64ToUint8(authSaltB64), iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+    baseKey,
+    256
+  )
+  const master = await crypto.subtle.importKey('raw', masterBits, 'HKDF', false, ['deriveBits', 'deriveKey'])
+  const authBits = await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: AUTH_INFO },
+    master,
+    256
+  )
+  return { authKey: uint8ToBase64(new Uint8Array(authBits)), master }
+}
+
+/** v2 KEK: HKDF from the master secret. Non-extractable AES-GCM key. */
+async function deriveKek(master: CryptoKey, keySalt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: keySalt, info: KEK_INFO },
+    master,
+    AES_PARAMS,
+    false,
+    ['encrypt', 'decrypt']
+  )
+}
+
+/** v1 KEK: PBKDF2 straight from the password. Only used to unwrap a legacy backup during upgrade. */
+async function deriveLegacyKek(password: string, salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
   const baseKey = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(password),
@@ -94,80 +147,108 @@ type ServerKeys = {
   keySalt: string | null
 }
 
+const privDbKeyFor = (username: string) => `iris-private-key-${username}`
+const pubDbKeyFor  = (username: string) => `iris-public-key-${username}`
+
+async function fetchMyKeys(token: string): Promise<ServerKeys> {
+  const res = await fetch(`${apiBase}/api/keys/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw new Error(`Failed to fetch own keys: ${res.status}`)
+  return await res.json() as ServerKeys
+}
+
 /**
- * Decrypt the server-stored, password-wrapped private key, cache both halves in
- * IDB, and import them. Used by the normal restore branch AND by the conflict
- * (409) path, so a second device always converges on the ONE server keypair.
+ * Import the private JWK as a NON-extractable CryptoKey and cache that in IDB.
+ * IndexedDB structured-clones CryptoKeys, so the raw key material never sits in
+ * storage where an injected script could read it — it can only ask Web Crypto to
+ * decrypt while the page is open. If the browser refuses to store the key, the
+ * session still works from memory; the user just unlocks again next launch.
+ */
+async function cachePrivateKey(dbKey: string, jwk: JsonWebKey): Promise<CryptoKey> {
+  const key = await crypto.subtle.importKey('jwk', jwk, RSA_PARAMS, false, ['decrypt'])
+  try {
+    await set(dbKey, key)
+  } catch (err) {
+    console.warn('Could not persist private key; it will be kept in memory only', err)
+  }
+  return key
+}
+
+/**
+ * Decrypt the server-stored, KEK-wrapped private key, cache it in IDB, and import
+ * both halves. Used by the normal restore branch AND by the conflict (409) path,
+ * so a second device always converges on the ONE server keypair.
  * Throws OperationError if the password is wrong (AES-GCM auth failure).
  */
 async function restoreFromBackup(
   keys: ServerKeys,
-  password: string,
+  master: CryptoKey,
   privDbKey: string,
   pubDbKey: string,
 ): Promise<{ privateKey: CryptoKey; publicKey: CryptoKey }> {
-  const salt = base64ToUint8(keys.keySalt!)
-  const kek = await deriveKek(password, salt)
+  const kek = await deriveKek(master, base64ToUint8(keys.keySalt!))
   const privateJwk = JSON.parse(await unwrapPrivateJwk(keys.encryptedPrivateKey!, kek)) as JsonWebKey
   const publicJwk  = JSON.parse(keys.publicKey!) as JsonWebKey
-  await set(privDbKey, privateJwk)
-  await set(pubDbKey,  publicJwk)
+  const privateKey = await cachePrivateKey(privDbKey, privateJwk)
+  await set(pubDbKey, publicJwk)
   return {
-    privateKey: await crypto.subtle.importKey('jwk', privateJwk, RSA_PARAMS, false, ['decrypt']),
-    publicKey:  await crypto.subtle.importKey('jwk', publicJwk,  RSA_PARAMS, false, ['encrypt']),
+    privateKey,
+    publicKey: await crypto.subtle.importKey('jwk', publicJwk, RSA_PARAMS, false, ['encrypt']),
   }
 }
 
 /**
  * Three-branch keypair recovery:
  *   1. IDB has both halves         → fast-path, no server / password needed.
- *   2. IDB empty, server has backup → derive KEK from password, decrypt privkey, save to IDB.
- *   3. Nothing anywhere            → generate, encrypt privkey under password, upload everything.
+ *   2. IDB empty, server has backup → derive KEK from the master secret, decrypt privkey, save to IDB.
+ *   3. Nothing anywhere            → generate, encrypt privkey under the KEK, upload everything.
  *
- * The password is required for branches 2 and 3; pass an empty string only when
- * you're confident IDB is populated (e.g. page reload with existing token).
+ * `master` (from deriveCredentials) is required for branches 2 and 3; pass null
+ * only when you're confident IDB is populated (e.g. page reload with existing token).
  */
-export async function ensureKeyPair(username: string, password: string, token: string): Promise<{
+export async function ensureKeyPair(username: string, master: CryptoKey | null, token: string): Promise<{
   privateKey: CryptoKey
   publicKey: CryptoKey
 }> {
-  const privDbKey = `iris-private-key-${username}`
-  const pubDbKey  = `iris-public-key-${username}`
+  const privDbKey = privDbKeyFor(username)
+  const pubDbKey  = pubDbKeyFor(username)
 
-  // Branch 1: IDB-only fast path
-  const existingPriv = await get<JsonWebKey>(privDbKey)
+  // Branch 1: IDB-only fast path. Older builds cached the private key as a plain
+  // JWK; convert those to a non-extractable CryptoKey (overwriting the JWK) on sight.
+  const existingPriv = await get<CryptoKey | JsonWebKey>(privDbKey)
   const existingPub  = await get<JsonWebKey>(pubDbKey)
   if (existingPriv && existingPub) {
     return {
-      privateKey: await crypto.subtle.importKey('jwk', existingPriv, RSA_PARAMS, false, ['decrypt']),
-      publicKey:  await crypto.subtle.importKey('jwk', existingPub,  RSA_PARAMS, false, ['encrypt']),
+      privateKey: existingPriv instanceof CryptoKey
+        ? existingPriv
+        : await cachePrivateKey(privDbKey, existingPriv),
+      publicKey: await crypto.subtle.importKey('jwk', existingPub, RSA_PARAMS, false, ['encrypt']),
     }
   }
 
   // Branches 2 & 3 both need to derive a KEK
-  if (!password) throw new Error('Password required to unlock or create keypair — log in again')
+  if (!master) throw new Error('Password required to unlock or create keypair — log in again')
 
-  const meRes = await fetch(`${apiBase}/api/keys/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  })
-  if (!meRes.ok) throw new Error(`Failed to fetch own keys: ${meRes.status}`)
-  const myKeys = await meRes.json() as ServerKeys
+  const myKeys = await fetchMyKeys(token)
 
   // Branch 2: server has a backup → unlock it (recovers the SAME key on every device)
   if (myKeys.publicKey && myKeys.encryptedPrivateKey && myKeys.keySalt) {
-    return restoreFromBackup(myKeys, password, privDbKey, pubDbKey)
+    return restoreFromBackup(myKeys, master, privDbKey, pubDbKey)
   }
 
   // Branch 3: cold start — generate, upload, and ONLY persist locally once the
   // server has accepted. Writing IDB before the upload (the old behaviour) meant a
   // failed POST left an un-backed-up local key that Branch 1 would then serve
   // forever while the server stayed empty — the root cause of cross-device divergence.
+  // The pair must be extractable once so the private half can be wrapped; only the
+  // non-extractable re-import is kept.
   const pair = await crypto.subtle.generateKey(RSA_PARAMS, true, ['encrypt', 'decrypt']) as CryptoKeyPair
   const privateJwk = await crypto.subtle.exportKey('jwk', pair.privateKey)
   const publicJwk  = await crypto.subtle.exportKey('jwk', pair.publicKey)
 
-  const salt = crypto.getRandomValues(new Uint8Array(new ArrayBuffer(SALT_BYTES)))
-  const kek = await deriveKek(password, salt)
+  const keySalt = newSalt()
+  const kek = await deriveKek(master, base64ToUint8(keySalt))
   const encryptedPrivateKey = await wrapPrivateJwk(JSON.stringify(privateJwk), kek)
 
   const res = await fetch(`${apiBase}/api/keys`, {
@@ -176,7 +257,7 @@ export async function ensureKeyPair(username: string, password: string, token: s
     body: JSON.stringify({
       publicKey: JSON.stringify(publicJwk),
       encryptedPrivateKey,
-      keySalt: uint8ToBase64(salt),
+      keySalt,
     }),
   })
 
@@ -184,25 +265,111 @@ export async function ensureKeyPair(username: string, password: string, token: s
   // race). Our freshly generated keypair is the wrong one — throw it away and recover
   // the authoritative key from the server so BOTH devices end up on a single keypair.
   if (res.status === 409) {
-    const recoverRes = await fetch(`${apiBase}/api/keys/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (!recoverRes.ok) throw new Error(`Failed to recover keys after conflict: ${recoverRes.status}`)
-    const recovered = await recoverRes.json() as ServerKeys
+    const recovered = await fetchMyKeys(token)
     if (!(recovered.publicKey && recovered.encryptedPrivateKey && recovered.keySalt)) {
       throw new Error('Server reported a key conflict but has no recoverable backup')
     }
-    return restoreFromBackup(recovered, password, privDbKey, pubDbKey)
+    return restoreFromBackup(recovered, master, privDbKey, pubDbKey)
   }
   if (!res.ok) throw new Error(`Failed to upload keys: ${res.status}`)
 
   // Server accepted — now it's safe to cache the keypair locally.
-  await set(privDbKey, privateJwk)
-  await set(pubDbKey,  publicJwk)
+  const privateKey = await cachePrivateKey(privDbKey, privateJwk)
+  await set(pubDbKey, publicJwk)
   return {
-    privateKey: await crypto.subtle.importKey('jwk', privateJwk, RSA_PARAMS, false, ['decrypt']),
-    publicKey:  await crypto.subtle.importKey('jwk', publicJwk,  RSA_PARAMS, false, ['encrypt']),
+    privateKey,
+    publicKey: await crypto.subtle.importKey('jwk', publicJwk, RSA_PARAMS, false, ['encrypt']),
   }
+}
+
+// ── v1 → v2 account upgrade ────────────────────────────────────────
+
+export type AuthSaltInfo = { version: number; authSalt: string | null }
+
+const upgradedMarkFor = (username: string) => `iris-cred-v2-${username}`
+
+/** Remember that this account is v2, so this device never again sends its raw password. */
+export function markUpgraded(username: string): void {
+  try { localStorage.setItem(upgradedMarkFor(username), '1') } catch { /* storage blocked — guard just won't apply */ }
+}
+
+/**
+ * Pre-login lookup of the account's credential version + salt. A malicious server
+ * could answer "v1" for a v2 account to trick the client into sending the raw
+ * password; once this device has seen the account at v2, refuse that downgrade.
+ */
+export async function fetchAuthSalt(username: string): Promise<AuthSaltInfo> {
+  const res = await fetch(`${apiBase}/auth/salt/${encodeURIComponent(username)}`)
+  if (!res.ok) throw new Error(`Failed to start login: ${res.status}`)
+  const info = await res.json() as AuthSaltInfo
+  let upgradedHere = false
+  try { upgradedHere = localStorage.getItem(upgradedMarkFor(username)) === '1' } catch { /* ignore */ }
+  if (info.version < 2 && upgradedHere) {
+    throw new Error("The server asked for this account's legacy password login, which this device already upgraded. Refusing to send your password.")
+  }
+  if (info.version >= 2 && !info.authSalt) throw new Error('Server returned no salt for this account')
+  return info
+}
+
+/**
+ * One-time migration for a v1 account, run right after a successful legacy login
+ * (or a legacy unlock). Unwraps the old PBKDF2(password)-wrapped backup, re-wraps
+ * the SAME private key under the new HKDF KEK, and has the server atomically swap
+ * in bcrypt(authKey) + the new backup. Returns the v2 master secret.
+ *
+ * Throws OperationError if the password doesn't match (legacy unwrap or server check).
+ */
+export async function upgradeLegacyAccount(username: string, password: string, token: string): Promise<CryptoKey> {
+  const myKeys = await fetchMyKeys(token)
+  const authSalt = newSalt()
+  const { authKey, master } = await deriveCredentials(password, authSalt)
+
+  let rewrapped: ServerKeys = { publicKey: null, encryptedPrivateKey: null, keySalt: null }
+  if (myKeys.publicKey && myKeys.encryptedPrivateKey && myKeys.keySalt) {
+    const legacyKek = await deriveLegacyKek(password, base64ToUint8(myKeys.keySalt))
+    const privateJwkString = await unwrapPrivateJwk(myKeys.encryptedPrivateKey, legacyKek)
+    const keySalt = newSalt()
+    const kek = await deriveKek(master, base64ToUint8(keySalt))
+    rewrapped = {
+      publicKey: myKeys.publicKey, // echoed verbatim — the server rejects any other key
+      encryptedPrivateKey: await wrapPrivateJwk(privateJwkString, kek),
+      keySalt,
+    }
+
+    // Seed an empty device with the key now. The keypair doesn't change in this
+    // migration, so caching it before the server call can't cause divergence — and
+    // it keeps the session usable even if the upgrade request fails.
+    const privDbKey = privDbKeyFor(username)
+    const pubDbKey  = pubDbKeyFor(username)
+    if (!(await get(privDbKey)) || !(await get(pubDbKey))) {
+      await cachePrivateKey(privDbKey, JSON.parse(privateJwkString) as JsonWebKey)
+      await set(pubDbKey, JSON.parse(myKeys.publicKey) as JsonWebKey)
+    }
+  }
+
+  const res = await fetch(`${apiBase}/api/credentials/upgrade`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ currentPassword: password, authKey, authSalt, ...rewrapped }),
+  })
+
+  // 409 = another device finished the upgrade first. Its authSalt is authoritative;
+  // re-derive against it so both devices share one master secret.
+  if (res.status === 409) {
+    markUpgraded(username)
+    const info = await fetchAuthSalt(username)
+    return (await deriveCredentials(password, info.authSalt!)).master
+  }
+  if (res.status === 403) {
+    // Same signal the AES-GCM unwrap gives for a wrong password, so callers handle both alike.
+    const err = new Error('Wrong password')
+    err.name = 'OperationError'
+    throw err
+  }
+  if (!res.ok) throw new Error(`Account upgrade failed: ${res.status}`)
+
+  markUpgraded(username)
+  return master
 }
 
 /**
