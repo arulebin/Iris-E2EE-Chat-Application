@@ -8,7 +8,9 @@
     /* @iris/core consumed as source; see vite.config.ts for why frontend is not an npm workspace */
     "paths": {
       "@iris/core": ["../packages/core/src/index.ts"],
-      "@privacyresearch/libsignal-protocol-typescript": ["./node_modules/@privacyresearch/libsignal-protocol-typescript"]
+      "@privacyresearch/libsignal-protocol-typescript": ["./node_modules/@privacyresearch/libsignal-protocol-typescript"],
+      "@noble/curves/*": ["./node_modules/@noble/curves/*"],
+      "@noble/hashes/*": ["./node_modules/@noble/hashes/*"]
     },
     "skipLibCheck": true,
 
