@@ -19,9 +19,10 @@ frontend/node_modules/
 # Untracked/Unwanted Root files
 front-end-logs.txt
 node_modules/
-package-lock.json
-package.json
+/mobile/android/
+/mobile/ios/
 PROGRESS.md
 SUMMARY.md
 .claude/
 !.env.*.example
+local.properties
