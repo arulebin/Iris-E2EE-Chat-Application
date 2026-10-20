@@ -16,7 +16,13 @@
     </style>
 
 
+    <!-- Launch theme. Android 12+ draws the system splash from the windowSplashScreen*
+         attributes (brand mark on the app background); older versions fall back to the
+         full-screen @drawable/splash. -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
+        <item name="windowSplashScreenBackground">@color/splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
     </style>
 </resources>

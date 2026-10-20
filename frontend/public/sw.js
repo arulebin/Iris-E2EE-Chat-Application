@@ -1,12 +1,13 @@
 // Iris service worker — caching + push notifications
 
-const CACHE_VERSION = 'iris-v1'
+const CACHE_VERSION = 'iris-v2'
 
 const APP_SHELL = [
   '/',
   '/index.html',
   '/manifest.json',
   '/iris-icon.svg',
+  '/icon-192.png',
 ]
 
 // ── lifecycle ────────────────────────────────────────────────────
@@ -78,8 +79,8 @@ self.addEventListener('push', (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || 'Iris', {
       body:     data.body || '',
-      icon:     '/iris-icon.svg',
-      badge:    '/iris-icon.svg',
+      icon:     '/icon-192.png',
+      badge:    '/favicon-32.png',
       tag:      'iris-message',
       renotify: true,
     })
