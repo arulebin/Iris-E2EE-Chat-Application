@@ -21,22 +21,10 @@ public class MessageController {
     public List<OutgoingMessage> getMessages(Authentication auth, @RequestParam("with") String with) {
         String me = auth.getName();
 
+        // v2 rows come back as metadata only (empty content): their plaintext lives
+        // on the participants' devices, not here.
         return messageRepository.findConversation(me, with).stream()
-            .map(m -> new OutgoingMessage(
-                m.getId(),
-                m.getSender(),
-                m.getRecipient(),
-                m.getContent(),
-                m.getEncryptedKeyForSender(),
-                m.getEncryptedKeyForRecipient(),
-                m.getMediaId(),
-                m.getMimeType(),
-                m.isViewOnce(),
-                m.getViewedAt(),
-                m.getSentAt(),
-                m.getReplyToId(),
-                m.getReadAt()
-            ))
+            .map(OutgoingMessage::of)
             .toList();
     }
 
