@@ -95,6 +95,7 @@ export function MessageList({ messages, me, token, onMarkSnapViewed, onStartRepl
                   isOwn={isOwn}
                   mediaId={msg.mediaId}
                   mimeType={msg.mimeType}
+                  mediaKey={msg.mediaKey}
                   viewOnce={msg.viewOnce}
                   viewedAt={msg.viewedAt}
                   token={token}
@@ -115,6 +116,7 @@ export function MessageList({ messages, me, token, onMarkSnapViewed, onStartRepl
         <SnapViewer
           mediaId={openSnap.mediaId}
           mimeType={openSnap.mimeType}
+          mediaKey={openSnap.mediaKey}
           token={token}
           onClose={() => setOpenSnap(null)}
           onConsumed={() => {

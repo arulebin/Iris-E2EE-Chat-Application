@@ -23,6 +23,8 @@ import java.util.UUID;
 public class MediaController {
 
     private static final long MAX_BYTES = 50L * 1024 * 1024; // 50 MB
+    private static final String E2E_EXT = ".e2e";    // client-encrypted, stored opaque
+    private static final String LEGACY_EXT = ".bin"; // server-encrypted at rest (MediaEncryption)
 
     @Value("${media.storage-dir:./data/media}")
     private String storageDirProp;
@@ -57,6 +59,18 @@ public class MediaController {
                 ? "application/octet-stream"
                 : file.getContentType();
 
+        String mediaId = UUID.randomUUID().toString();
+
+        // Current clients encrypt in the browser and upload opaque ciphertext. We store
+        // it byte-for-byte as <id>.e2e — the server never holds the key or the plaintext.
+        if (mimeType.startsWith("application/octet-stream")) {
+            byte[] ciphertext = file.getBytes();
+            Files.write(storageDir.resolve(mediaId + E2E_EXT), ciphertext);
+            return ResponseEntity.ok(new UploadResponse(mediaId, mimeType, ciphertext.length));
+        }
+
+        // LEGACY: a stale (pre-E2E) client still uploading a plaintext image/video.
+        // Keep accepting it with server-side encryption at rest so old tabs don't break.
         if (!mimeType.startsWith("image/") && !mimeType.startsWith("video/")) {
             return ResponseEntity.badRequest().build();
         }
@@ -64,8 +78,7 @@ public class MediaController {
         byte[] plaintext = file.getBytes();
         byte[] encrypted = encryption.encrypt(plaintext);
 
-        String mediaId = UUID.randomUUID().toString();
-        Path target = storageDir.resolve(mediaId + ".bin");
+        Path target = storageDir.resolve(mediaId + LEGACY_EXT);
         Files.write(target, encrypted);
 
         return ResponseEntity.ok(new UploadResponse(mediaId, mimeType, plaintext.length));
@@ -119,11 +132,15 @@ public class MediaController {
             return ResponseEntity.status(403).build();
         }
 
-        Path file = storageDir.resolve(mediaId + ".bin");
+        // E2E blobs are served as-is (the client decrypts); legacy .bin files were
+        // encrypted at rest with the server master key and are decrypted here.
+        Path e2eFile = storageDir.resolve(mediaId + E2E_EXT);
+        boolean isE2e = Files.exists(e2eFile);
+        Path file = isE2e ? e2eFile : storageDir.resolve(mediaId + LEGACY_EXT);
         if (!Files.exists(file)) return ResponseEntity.notFound().build();
 
-        byte[] encrypted = Files.readAllBytes(file);
-        byte[] plaintext = encryption.decrypt(encrypted);
+        byte[] stored = Files.readAllBytes(file);
+        byte[] body = isE2e ? stored : encryption.decrypt(stored);
 
         if (msg.isViewOnce() && isRecipient && msg.getViewedAt() == null) {
             msg.setViewedAt(Instant.now());
@@ -134,20 +151,23 @@ public class MediaController {
             }
         }
 
-        MediaType type;
-        try {
-            type = MediaType.parseMediaType(msg.getMimeType());
-        } catch (Exception e) {
-            type = MediaType.APPLICATION_OCTET_STREAM;
+        // The client relies on octet-stream meaning "ciphertext — decrypt me".
+        MediaType type = MediaType.APPLICATION_OCTET_STREAM;
+        if (!isE2e) {
+            try {
+                type = MediaType.parseMediaType(msg.getMimeType());
+            } catch (Exception e) {
+                type = MediaType.APPLICATION_OCTET_STREAM;
+            }
         }
 
         String cache = msg.isViewOnce() ? "no-store" : "private, max-age=3600";
 
         return ResponseEntity.ok()
                 .contentType(type)
-                .contentLength(plaintext.length)
+                .contentLength(body.length)
                 .header(HttpHeaders.CACHE_CONTROL, cache)
-                .body(new ByteArrayResource(plaintext));
+                .body(new ByteArrayResource(body));
     }
 
     @GetMapping("/profile/{filename}")

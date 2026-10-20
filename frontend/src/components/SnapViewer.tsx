@@ -5,12 +5,13 @@ import { XIcon } from "./icons";
 type Props = {
   mediaId: string;
   mimeType: string | null | undefined;
+  mediaKey?: string | null; // E2E blob key; absent for legacy server-encrypted media
   token: string;
   onClose: () => void;
   onConsumed: () => void; // fired after the bytes are loaded — caller should mark "viewed" locally
 };
 
-export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Props) {
+export function SnapViewer({ mediaId, mimeType, mediaKey, token, onClose, onConsumed }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -29,7 +30,7 @@ export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Pr
   // double-renders we don't accidentally drop the image or fire duplicate fetches.
   useEffect(() => {
     let cancelled = false;
-    fetchMediaObjectURL(mediaId, token)
+    fetchMediaObjectURL(mediaId, token, mediaKey, mimeType)
       .then((url) => {
         if (cancelled) return;
         setSrc(url);
@@ -50,7 +51,7 @@ export function SnapViewer({ mediaId, mimeType, token, onClose, onConsumed }: Pr
     return () => {
       cancelled = true;
     };
-  }, [mediaId, token]);
+  }, [mediaId, token, mediaKey, mimeType]);
 
   return (
     <div
