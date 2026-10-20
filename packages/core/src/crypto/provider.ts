@@ -27,6 +27,10 @@ export type RsaJwk = {
   dp?: string
   dq?: string
   qi?: string
+  /** Metadata WebCrypto adds on export; ignored on import, kept so stored JWKs round-trip verbatim. */
+  alg?: string
+  ext?: boolean
+  key_ops?: string[]
 }
 
 export interface CryptoProvider {
@@ -54,6 +58,13 @@ export interface CryptoProvider {
   /** Legacy identity cross-signature. RSA-PSS, SHA-256, MGF1-SHA-256, explicit salt length. */
   rsaPssSign(privateJwk: RsaJwk, data: Bytes, saltLength: number): Promise<Bytes>
   rsaPssVerify(publicJwk: RsaJwk, signature: Bytes, data: Bytes, saltLength: number): Promise<boolean>
+
+  /**
+   * Account-creation only (the legacy RSA backup key of new accounts): RSA-OAEP 2048 / SHA-256,
+   * e = 65537, returned as the JWKs WebCrypto exports. Absent on backends that cannot generate
+   * keys (they can still read and use existing ones).
+   */
+  rsaOaepGenerate?(): Promise<{ publicJwk: RsaJwk; privateJwk: RsaJwk }>
 
   /** Optional (backups). Callers fall back to uncompressed when absent. */
   gzip?(data: Bytes): Promise<Bytes>

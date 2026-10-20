@@ -9,6 +9,8 @@ export type SubtleLike = {
   decrypt(alg: any, key: any, data: any): Promise<ArrayBuffer>
   sign(alg: any, key: any, data: any): Promise<ArrayBuffer>
   verify(alg: any, key: any, sig: any, data: any): Promise<boolean>
+  generateKey?(alg: any, extractable: boolean, usages: any[]): Promise<any>
+  exportKey?(format: any, key: any): Promise<any>
 }
 
 export type SubtleProviderOptions = {
@@ -61,6 +63,18 @@ export function createSubtleProvider(o: SubtleProviderOptions): CryptoProvider {
       u8(await subtle.sign({ name: 'RSA-PSS', saltLength }, await rsa('RSA-PSS', jwk, 'sign', true), data)),
     rsaPssVerify: async (jwk, sig, data, saltLength) =>
       subtle.verify({ name: 'RSA-PSS', saltLength }, await rsa('RSA-PSS', jwk, 'verify', false), sig, data),
+    rsaOaepGenerate: subtle.generateKey && subtle.exportKey
+      ? async () => {
+          const pair = await subtle.generateKey!(
+            { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+            true, ['encrypt', 'decrypt'],
+          )
+          return {
+            privateJwk: (await subtle.exportKey!('jwk', pair.privateKey)) as RsaJwk,
+            publicJwk: (await subtle.exportKey!('jwk', pair.publicKey)) as RsaJwk,
+          }
+        }
+      : undefined,
     gzip: o.gzip,
     gunzip: o.gunzip,
   }
