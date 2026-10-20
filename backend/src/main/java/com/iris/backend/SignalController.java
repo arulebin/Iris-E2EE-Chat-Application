@@ -21,13 +21,16 @@ public class SignalController {
     private final UserRepository userRepository;
     private final FriendRequestRepository friendRequestRepository;
     private final ChatWebSocketHandler chatHandler;
+    private final SessionService sessionService;
 
     public SignalController(SignalKeyService keys, UserRepository userRepository,
-                            FriendRequestRepository friendRequestRepository, ChatWebSocketHandler chatHandler) {
+                            FriendRequestRepository friendRequestRepository, ChatWebSocketHandler chatHandler,
+                            SessionService sessionService) {
         this.keys = keys;
         this.userRepository = userRepository;
         this.friendRequestRepository = friendRequestRepository;
         this.chatHandler = chatHandler;
+        this.sessionService = sessionService;
     }
 
     private boolean canSee(String me, String other) {
@@ -102,6 +105,9 @@ public class SignalController {
     public ResponseEntity<Void> removeDevice(@PathVariable int deviceId, Authentication auth) {
         if (!keys.removeDevice(auth.getName(), deviceId)) return ResponseEntity.notFound().build();
         chatHandler.revokeDevice(auth.getName(), deviceId);
+        // Its refresh tokens die with it: the removed device is logged out once its
+        // current access token (≤ 1 h) expires.
+        sessionService.revokeDevice(auth.getName(), deviceId);
         return ResponseEntity.noContent().build();
     }
 

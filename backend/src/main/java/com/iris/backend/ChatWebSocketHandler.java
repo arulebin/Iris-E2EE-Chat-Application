@@ -1,5 +1,8 @@
 package com.iris.backend;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -23,8 +26,17 @@ import java.util.concurrent.CopyOnWriteArraySet;
 @Component
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
+    private static final Logger log = LoggerFactory.getLogger(ChatWebSocketHandler.class);
+
     // Base64 of one Signal ciphertext. Text + media envelopes are far below this.
     private static final int MAX_ENVELOPE_CHARS = 256 * 1024;
+
+    // Clients that heartbeat ping every ~25 s. A session that has pinged before but
+    // goes quiet this long is half-open (NAT timeout, Doze, network switch): close it
+    // so presence goes offline and pushes are sent instead of written into the void.
+    static final long HEARTBEAT_TIMEOUT_MS = 75_000;
+    private static final String LAST_PING = "lastPingAt";
+    private static final String PING_FRAME = "{\"type\":\"ping\"}";
 
     private final MessageRepository messageRepository;
     private final ObjectMapper objectMapper;
@@ -98,7 +110,59 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage textMessage) throws Exception {
+    protected void handleTextMessage(WebSocketSession session, TextMessage textMessage) {
+        String payload = textMessage.getPayload();
+        // Heartbeats are a fixed frame, matched exactly so they skip JSON parsing.
+        if (PING_FRAME.equals(payload)) {
+            session.getAttributes().put(LAST_PING, System.currentTimeMillis());
+            send(session, "{\"type\":\"pong\"}");
+            return;
+        }
+        // One malformed or failing message must not take the socket down with it
+        // (an uncaught exception here closes the session with 1011).
+        try {
+            dispatch(session, textMessage);
+        } catch (Exception e) {
+            log.warn("WebSocket message from {} failed: {}", session.getAttributes().get("username"), e.toString());
+            String clientId = null;
+            try {
+                JsonNode root = objectMapper.readTree(payload);
+                if (root.hasNonNull("clientId")) clientId = root.get("clientId").asText();
+            } catch (Exception ignored) { /* unparseable */ }
+            ObjectNode err = objectMapper.createObjectNode();
+            err.put("type", "send-error");
+            if (clientId != null) err.put("clientId", clientId);
+            err.put("reason", "server-error");
+            send(session, err.toString());
+        }
+    }
+
+    private static void send(WebSocketSession session, String frame) {
+        try {
+            if (session.isOpen()) session.sendMessage(new TextMessage(frame));
+        } catch (IOException | IllegalStateException ignored) {
+            // closing / concurrent send — the client's heartbeat will notice
+        }
+    }
+
+    @Scheduled(fixedDelay = 30_000, initialDelay = 30_000)
+    void closeSilentSessions() {
+        long cutoff = System.currentTimeMillis() - HEARTBEAT_TIMEOUT_MS;
+        for (Set<WebSocketSession> userSessions : sessionsByUser.values()) {
+            for (WebSocketSession s : userSessions) {
+                // Only sessions that heartbeat are judged; older clients never ping.
+                Long last = (Long) s.getAttributes().get(LAST_PING);
+                if (last == null || last >= cutoff) continue;
+                try {
+                    s.close(CloseStatus.SESSION_NOT_RELIABLE);
+                } catch (IOException e) {
+                    // afterConnectionClosed still runs and cleans up
+                }
+            }
+        }
+    }
+
+    private void dispatch(WebSocketSession session, TextMessage textMessage) throws Exception {
         String sender = (String) session.getAttributes().get("username");
 
         JsonNode root = objectMapper.readTree(textMessage.getPayload());

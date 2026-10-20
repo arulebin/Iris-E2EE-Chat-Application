@@ -15,7 +15,9 @@ public class Message {
     private String sender;
 
     // Allow empty content for media-only messages (caption is optional).
-    @Column(length=4000)
+    // TEXT: a legacy (v1) RSA-hybrid ciphertext of a long message overflows varchar(4000).
+    // Existing Postgres columns are widened by ColumnTypeMigrator.
+    @Column(columnDefinition = "TEXT")
     private String content;
 
     @Column(nullable = false, updatable = false)
