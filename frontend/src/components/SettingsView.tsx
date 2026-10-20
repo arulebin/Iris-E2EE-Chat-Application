@@ -2,6 +2,7 @@ import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import { BackIcon, BellIcon, LogoutIcon } from "./icons";
 import { Avatar } from "./Avatar";
+import { AppLockSettings } from "./AppLockSettings";
 import { getThemePref, setThemePref, type ThemePref } from "../lib/theme";
 import { useProfileImage } from "../lib/profileImage";
 import {
@@ -185,6 +186,8 @@ export function SettingsView({
             </div>
           </section>
         )}
+
+        {me && <AppLockSettings me={me} />}
 
         <section>
           <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-2">

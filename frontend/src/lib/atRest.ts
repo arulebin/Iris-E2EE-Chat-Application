@@ -20,6 +20,15 @@ const SKW = 'skw'   // native: Keystore-wrapped raw key bytes
 // racing to create or migrate the key would otherwise each write their own and
 // orphan whatever the loser encrypted.
 const storageKeys = new WeakMap<KV, Map<string, Promise<CryptoKey>>>()
+const keyMaps = new Set<Map<string, Promise<CryptoKey>>>()
+
+/**
+ * Forget every loaded storage key (App lock engaging): the next use has to
+ * unwrap again, which for an app-locked key means a fresh authentication.
+ */
+export function dropAllStorageKeys(): void {
+  for (const m of keyMaps) m.clear()
+}
 
 const importStorageKey = (raw: Uint8Array<ArrayBuffer>) =>
   crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
@@ -55,7 +64,10 @@ export class AtRestCipher {
 
   getKey(): Promise<CryptoKey> {
     let perKv = storageKeys.get(this.kv)
-    if (!perKv) storageKeys.set(this.kv, (perKv = new Map()))
+    if (!perKv) {
+      storageKeys.set(this.kv, (perKv = new Map()))
+      keyMaps.add(perKv)
+    }
     let pending = perKv.get(this.prefix)
     if (!pending) {
       pending = this.wrapper ? this.loadWrappedKey(this.wrapper) : this.loadPlainKey()

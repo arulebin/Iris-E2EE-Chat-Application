@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { Capacitor } from '@capacitor/core'
 import './index.css'
 import App from './App.tsx'
+import { AppLock } from './components/AppLock.tsx'
 import { initTheme } from './lib/theme'
 import { initScreenSecurity } from './lib/screenSecurity'
 
@@ -26,7 +27,9 @@ if ('serviceWorker' in navigator && !Capacitor.isNativePlatform()) {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
-      <App />
+      <AppLock>
+        <App />
+      </AppLock>
     </BrowserRouter>
   </StrictMode>,
 )

@@ -1,5 +1,6 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import { fromBase64, toBase64 } from '../crypto'
+import { appLockWrapper } from './appLockWrapper'
 
 // Android Keystore wrapping for the Signal storage key (native app only).
 //
@@ -32,8 +33,17 @@ const Keystore = registerPlugin<KeystorePlugin>('Keystore')
 export const nativeKeystoreAvailable = (): boolean =>
   Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('Keystore')
 
-/** A wrapper bound to one Keystore alias (one per local account), or null off-device. */
+/**
+ * The wrapper stores use for one alias (one per local account): the Keystore
+ * wrapper, with the optional App lock layered on top (lib/appLockWrapper), or
+ * null off-device when no lock layer applies.
+ */
 export function nativeKeyWrapper(alias: string): KeyWrapper | null {
+  return appLockWrapper(alias, plainNativeKeyWrapper(alias))
+}
+
+/** The bare Keystore wrapper for one alias (no App lock), or null off-device. */
+export function plainNativeKeyWrapper(alias: string): KeyWrapper | null {
   if (!nativeKeystoreAvailable()) return null
   return {
     async wrap(raw) {
