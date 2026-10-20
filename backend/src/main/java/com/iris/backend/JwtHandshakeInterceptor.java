@@ -1,5 +1,6 @@
 package com.iris.backend;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.server.ServerHttpRequest;
 import org.springframework.http.server.ServerHttpResponse;
 import org.springframework.stereotype.Component;
@@ -20,6 +21,13 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
         this.deviceRepository = deviceRepository;
     }
 
+    // Without an explicit status Spring answers a refused handshake with 200 and no
+    // upgrade, which reads like success in logs and to clients.
+    private static boolean reject(ServerHttpResponse response) {
+        response.setStatusCode(HttpStatus.UNAUTHORIZED);
+        return false;
+    }
+
     @Override
     public boolean beforeHandshake(ServerHttpRequest request,
                                    ServerHttpResponse response,
@@ -27,13 +35,13 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
                                    Map<String, Object> attributes) {
 
         String token = queryParam(request.getURI(), "token");
-        if (token == null) return false;        // no token → reject
+        if (token == null) return reject(response);   // no token → 401
 
         String username;
         try {
             username = jwtService.extractUsername(token);  // throws if invalid
         } catch (Exception e) {
-            return false;                                  // bad/expired token → reject
+            return reject(response);                       // bad/expired token → 401
         }
         attributes.put("username", username);              // remember on the session
 
@@ -49,6 +57,7 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
                     attributes.put("deviceRevoked", Boolean.TRUE);
                 }
             } catch (NumberFormatException e) {
+                response.setStatusCode(HttpStatus.BAD_REQUEST);
                 return false;
             }
         }
