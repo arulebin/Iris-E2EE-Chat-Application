@@ -50,6 +50,29 @@ services:
     mem_limit: 560m
     # no host port: only Caddy reaches it
 
+  # OPTIONAL signed-OTA update server (docs/ota-updates.md). Off by default; enable with
+  #   docker compose -f docker-compose.prod.yml --profile updates up -d
+  # It is a ~100-line dependency-free Node script that serves files uploaded by
+  # scripts/ota-publish.mjs. It holds NO signing key and mounts its data read-only.
+  updates:
+    profiles: ["updates"]
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "--max-old-space-size=24", "/app/server.mjs"]
+    environment:
+      PORT: "8081"
+      DATA_DIR: /data
+    volumes:
+      - ./updates-server:/app:ro
+      - ./updates-data:/data:ro
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 48m
+    # no host port: only Caddy reaches it
+
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped

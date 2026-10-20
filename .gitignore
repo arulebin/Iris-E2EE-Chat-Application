@@ -26,3 +26,11 @@ SUMMARY.md
 .claude/
 !.env.*.example
 local.properties
+
+# OTA code-signing PRIVATE keys and local publish output - never commit
+.ota-dev/
+.ota-keys/
+**/private-key.pem
+*.private.pem
+*-private-key.pem
+ota-out/
