@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -36,6 +37,23 @@ public final class EnvelopeFanout {
         for (int d : recipientDevices) expected.add(new Address(recipient, d));
         for (int d : senderDevices) {
             if (d != senderDeviceId) expected.add(new Address(sender, d));
+        }
+        return expected;
+    }
+
+    /**
+     * Group variant: every device of every member, minus the sending device. The
+     * sender's other devices are included because the sender is a member. Members
+     * with no Signal device simply have no entries (they can't receive v2 at all).
+     */
+    public static Set<Address> expectedGroupTargets(String sender, int senderDeviceId,
+                                                    Map<String, ? extends Collection<Integer>> devicesByMember) {
+        Set<Address> expected = new LinkedHashSet<>();
+        for (Map.Entry<String, ? extends Collection<Integer>> e : devicesByMember.entrySet()) {
+            for (int d : e.getValue()) {
+                if (e.getKey().equals(sender) && d == senderDeviceId) continue;
+                expected.add(new Address(e.getKey(), d));
+            }
         }
         return expected;
     }

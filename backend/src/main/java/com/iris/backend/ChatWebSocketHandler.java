@@ -14,6 +14,7 @@ import tools.jackson.databind.node.ObjectNode;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -33,6 +34,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
     private final FriendRequestRepository friendRequestRepository;
     private final SignalKeyService signalKeys;
     private final EnvelopeService envelopes;
+    private final GroupService groups;
 
     // username → that user's open sessions (could be multiple tabs/devices)
     private final Map<String, Set<WebSocketSession>> sessionsByUser = new ConcurrentHashMap<>();
@@ -44,7 +46,8 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             UserStatusService userStatusService,
             FriendRequestRepository friendRequestRepository,
             SignalKeyService signalKeys,
-            EnvelopeService envelopes
+            EnvelopeService envelopes,
+            GroupService groups
     ) {
         this.messageRepository = messageRepository;
         this.objectMapper = objectMapper;
@@ -53,6 +56,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         this.friendRequestRepository = friendRequestRepository;
         this.signalKeys = signalKeys;
         this.envelopes = envelopes;
+        this.groups = groups;
     }
 
     // Only accepted friends may message, call, or see each other's typing/read state.
@@ -139,6 +143,32 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
+        if ("typing".equals(type) && root.hasNonNull("group")) {
+            String groupId = root.get("group").asText();
+            if (!groups.isMember(groupId, sender)) return;
+            ObjectNode forwarded = objectMapper.createObjectNode();
+            forwarded.put("type", "typing");
+            forwarded.put("from", sender);
+            forwarded.put("group", groupId);
+            forwarded.put("state", root.has("state") ? root.get("state").asText() : "start");
+            sendToGroup(groupId, sender, forwarded.toString());
+            return;
+        }
+
+        if ("read".equals(type) && root.hasNonNull("group")) {
+            // sender has the group open; members' "seen by" state is metadata the server keeps
+            String groupId = root.get("group").asText();
+            Instant at = groups.markRead(groupId, sender);
+            if (at == null) return;
+            ObjectNode receipt = objectMapper.createObjectNode();
+            receipt.put("type", "group-read");
+            receipt.put("group", groupId);
+            receipt.put("by", sender);
+            receipt.put("at", at.toString());
+            sendToGroup(groupId, sender, receipt.toString());
+            return;
+        }
+
         if ("typing".equals(type)) {
             if (!root.has("to")) return;
             String to = root.get("to").asText();
@@ -185,6 +215,11 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         // ── chat message ──
         IncomingMessage incoming = objectMapper.treeToValue(root, IncomingMessage.class);
+
+        if (incoming.isGroup()) {
+            handleGroupV2(session, sender, incoming);
+            return;
+        }
 
         if (incoming.to() == null || incoming.to().isBlank()) return;
         if (!areFriends(sender, incoming.to())) return;
@@ -282,6 +317,78 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         if (!isActive(incoming.to())) {
             pushNotificationService.sendToUser(incoming.to(), "Iris", "New message");
+        }
+    }
+
+    /**
+     * Group message (Signal protocol only): the sender encrypts once per device of
+     * every member — Sesame-lite fan-out over the whole membership. The server checks
+     * the sender is a member and that the envelope set covers exactly the members'
+     * current devices, so a removed member never gets a copy.
+     */
+    private void handleGroupV2(WebSocketSession session, String sender, IncomingMessage incoming) throws IOException {
+        String clientId = incoming.clientId();
+        String groupId = incoming.groupId();
+        Integer senderDeviceId = deviceIdOf(session);
+        if (!incoming.isV2() || senderDeviceId == null) {
+            sendError(session, clientId, "no-device", null);
+            return;
+        }
+        if (!groups.isMember(groupId, sender)) {
+            sendError(session, clientId, "not-a-member", null);
+            return;
+        }
+        if (incoming.viewOnceFlag()) {
+            // One viewedAt per message can't express "viewed once by each member".
+            sendError(session, clientId, "no-snaps-in-groups", null);
+            return;
+        }
+        List<IncomingMessage.Envelope> provided = incoming.envelopes() == null ? List.of() : incoming.envelopes();
+        for (IncomingMessage.Envelope e : provided) {
+            if (e.user() == null || e.deviceId() == null || e.body() == null || e.body().length() > MAX_ENVELOPE_CHARS
+                    || e.type() == null || (e.type() != 1 && e.type() != 3)) {
+                sendError(session, clientId, "bad-envelope", null);
+                return;
+            }
+        }
+
+        List<String> members = groups.memberNames(groupId);
+        Map<String, List<Integer>> devicesByMember = new LinkedHashMap<>();
+        for (String m : members) devicesByMember.put(m, signalKeys.deviceIds(m));
+        Set<EnvelopeFanout.Address> expected = EnvelopeFanout.expectedGroupTargets(sender, senderDeviceId, devicesByMember);
+        EnvelopeFanout.Result fanout = EnvelopeFanout.check(expected,
+            provided.stream().map(e -> new EnvelopeFanout.Address(e.user(), e.deviceId())).toList());
+        if (!fanout.ok()) {
+            sendError(session, clientId, "device-mismatch", fanout);
+            return;
+        }
+
+        boolean hasMedia = incoming.mediaId() != null && !incoming.mediaId().isBlank();
+        EnvelopeService.Stored stored = envelopes.saveV2(
+            Message.v2Group(sender, senderDeviceId, groupId,
+                hasMedia ? incoming.mediaId() : null,
+                hasMedia ? incoming.mimeType() : null,
+                incoming.replyToId()),
+            provided);
+
+        for (MessageEnvelope env : stored.envelopes()) {
+            sendToDevice(env.getTargetUser(), env.getTargetDeviceId(), envelopeFrame(env, stored.message()));
+        }
+
+        ObjectNode sent = objectMapper.createObjectNode();
+        sent.put("type", "sent");
+        sent.put("clientId", clientId);
+        sent.set("message", objectMapper.valueToTree(toOutgoing(stored.message())));
+        session.sendMessage(new TextMessage(sent.toString()));
+
+        for (String m : members) {
+            if (!m.equals(sender) && !isActive(m)) pushNotificationService.sendToUser(m, "Iris", "New message");
+        }
+    }
+
+    private void sendToGroup(String groupId, String except, String payload) throws IOException {
+        for (String m : groups.memberNames(groupId)) {
+            if (!m.equals(except)) sendToUser(m, payload);
         }
     }
 

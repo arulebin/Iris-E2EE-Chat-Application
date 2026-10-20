@@ -44,12 +44,14 @@ public class MediaController {
 
     private final MediaEncryption encryption;
     private final MessageRepository messageRepository;
+    private final GroupService groupService;
 
     private Path storageDir;
 
-    public MediaController(MediaEncryption encryption, MessageRepository messageRepository) {
+    public MediaController(MediaEncryption encryption, MessageRepository messageRepository, GroupService groupService) {
         this.encryption = encryption;
         this.messageRepository = messageRepository;
+        this.groupService = groupService;
     }
 
     @PostConstruct
@@ -132,7 +134,11 @@ public class MediaController {
 
         String me = auth.getName();
         boolean isSender = me.equals(msg.getSender());
-        boolean isRecipient = me.equals(msg.getRecipient());
+        // Group media: every current member is a recipient (the blob is E2E-encrypted;
+        // its key only travels inside the members' envelopes).
+        boolean isRecipient = msg.getGroupId() != null
+            ? !isSender && groupService.isMember(msg.getGroupId(), me)
+            : me.equals(msg.getRecipient());
         if (!isSender && !isRecipient) {
             return ResponseEntity.status(403).build();
         }
