@@ -49,6 +49,13 @@ public class EnvelopeService {
             .toList();
     }
 
+    /** One undelivered envelope of this device (empty if it was acked already or isn't this device's). */
+    public java.util.Optional<Pending> pendingOne(String user, int deviceId, long envelopeId) {
+        return envelopeRepository.findById(envelopeId)
+            .filter(e -> e.getTargetUser().equals(user) && e.getTargetDeviceId() == deviceId)
+            .flatMap(e -> messageRepository.findById(e.getMessageId()).map(m -> new Pending(e, m)));
+    }
+
     public int ack(Collection<Long> ids, String user, int deviceId) {
         if (ids.isEmpty()) return 0;
         return envelopeRepository.ack(ids, user, deviceId);

@@ -317,7 +317,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
 
         if (!isActive(incoming.to())) {
             // Generic text: push payloads pass through the browser vendor's push service.
-            pushNotificationService.sendToUser(incoming.to(), "Iris", "New message");
+            pushNotificationService.sendNewMessage(incoming.to(), saved.getId(), null);
         }
     }
 
@@ -378,7 +378,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         session.sendMessage(new TextMessage(sent.toString()));
 
         if (!isActive(incoming.to())) {
-            pushNotificationService.sendToUser(incoming.to(), "Iris", "New message");
+            pushNotificationService.sendNewMessage(incoming.to(), stored.message().getId(), envelopesOf(stored, incoming.to()));
         }
     }
 
@@ -444,8 +444,15 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         session.sendMessage(new TextMessage(sent.toString()));
 
         for (String m : members) {
-            if (!m.equals(sender) && !isActive(m)) pushNotificationService.sendToUser(m, "Iris", "New message");
+            if (!m.equals(sender) && !isActive(m)) {
+                pushNotificationService.sendNewMessage(m, stored.message().getId(), envelopesOf(stored, m));
+            }
         }
+    }
+
+    /** The copies of a stored message addressed to one user's devices (what that user's pushes may carry). */
+    private static List<MessageEnvelope> envelopesOf(EnvelopeService.Stored stored, String user) {
+        return stored.envelopes().stream().filter(e -> user.equals(e.getTargetUser())).toList();
     }
 
     private void sendToGroup(String groupId, String except, String payload) throws IOException {

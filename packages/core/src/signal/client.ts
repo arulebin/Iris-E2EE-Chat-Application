@@ -169,14 +169,15 @@ export class SignalClient {
    * Open one delivered envelope, persist the result, and return it. Idempotent:
    * a message already in local history (redelivery, another tab) isn't decrypted
    * twice — which would fail, since its ratchet key is already used up.
+   * `fresh` is true only for the call that actually decrypted it (the one that may notify).
    */
-  async open(frame: { envType: number; body: string; message: V2Meta }): Promise<{ peer: string; message: ChatMessage }> {
+  async open(frame: { envType: number; body: string; message: V2Meta }): Promise<{ peer: string; message: ChatMessage; fresh: boolean }> {
     const meta = frame.message
     const groupId = meta.groupId ?? null
     const peer = groupId ? groupPeer(groupId) : meta.from === this.ctx.me ? meta.to : meta.from
     return withDeviceLock(this.ctx.me, async () => {
       const existing = (await getMessages(this.ctx.me, peer)).find(m => m.id === meta.id)
-      if (existing) return { peer, message: existing }
+      if (existing) return { peer, message: existing, fresh: false }
 
       let message: ChatMessage
       try {
@@ -194,7 +195,7 @@ export class SignalClient {
       await upsertMessage(this.ctx.me, peer, message)
       // A session-starting message used up one of our one-time prekeys.
       if (frame.envType === 3) this.scheduleMaintenance()
-      return { peer, message }
+      return { peer, message, fresh: true }
     })
   }
 

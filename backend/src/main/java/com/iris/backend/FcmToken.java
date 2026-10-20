@@ -30,6 +30,13 @@ public class FcmToken {
     @Column(length = 128)
     private String app;
 
+    /**
+     * Signal device id of the app instance that owns this token (mobile app only). Lets a message push carry
+     * exactly THAT device's envelope. NULL = unknown (legacy clients, or a mobile build without data-message
+     * handling): such tokens keep the generic visible notification.
+     */
+    private Integer deviceId;
+
     protected FcmToken() { }
 
     public FcmToken(String username, String token) {
@@ -44,4 +51,6 @@ public class FcmToken {
     public Instant getCreatedAt() { return createdAt; }
     public String getApp() { return app; }
     public void setApp(String app) { this.app = app; }
+    public Integer getDeviceId() { return deviceId; }
+    public void setDeviceId(Integer deviceId) { this.deviceId = deviceId; }
 }

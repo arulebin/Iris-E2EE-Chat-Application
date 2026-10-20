@@ -59,6 +59,23 @@ public class PushNotificationService {
     }
 
     /**
+     * New chat message for an inactive user. The mobile app gets a data-only push with its own device's
+     * ciphertext (see FcmSender.planMessage); legacy FCM tokens and browsers get the generic notification.
+     * `envelopes` are this user's copies of the message, null for a legacy v1 message.
+     */
+    public void sendNewMessage(String username, long messageId, List<MessageEnvelope> envelopes) {
+        fcmSender.sendNewMessage(username, messageId, envelopes);
+        sendWebPush(username, "Iris", "New message");
+    }
+
+    /** Connection request received / accepted: data-only wake for the mobile app, generic text elsewhere. */
+    public void sendSocial(String username, FcmSender.SocialEvent event) {
+        String body = event == FcmSender.SocialEvent.REQUEST ? "New connection request" : "Connection request accepted";
+        fcmSender.sendSocial(username, event, body);
+        sendWebPush(username, "Iris", body);
+    }
+
+    /**
      * Fan out to both browser (Web Push) subscriptions and Android (FCM) devices.
      * `urgent` marks call alerts: high priority + the "calls" channel on Android.
      */

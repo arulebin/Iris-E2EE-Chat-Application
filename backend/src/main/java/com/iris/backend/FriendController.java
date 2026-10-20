@@ -41,12 +41,12 @@ public class FriendController {
     // Push text stays generic (no usernames leave via FCM/Web Push); open clients
     // get a WebSocket nudge so request lists and friend lists refresh live.
     private void notifyRequest(String to) {
-        pushService.sendToUser(to, "Iris", "New connection request");
+        pushService.sendSocial(to, FcmSender.SocialEvent.REQUEST);
         chatHandler.notifyUser(to, "friends-changed");
     }
 
     private void notifyAccepted(String requester, String accepter) {
-        pushService.sendToUser(requester, "Iris", "Connection request accepted");
+        pushService.sendSocial(requester, FcmSender.SocialEvent.ACCEPTED);
         chatHandler.notifyUser(requester, "friends-changed");
         chatHandler.notifyUser(accepter, "friends-changed"); // the accepter's other tabs/devices
     }

@@ -11,17 +11,23 @@ public class PushController {
 
     private final PushSubscriptionRepository subscriptions;
     private final FcmTokenRepository fcmTokens;
+    private final DeviceRepository devices;
 
     @Value("${vapid.public-key}")
     private String vapidPublicKey;
 
-    public PushController(PushSubscriptionRepository subscriptions, FcmTokenRepository fcmTokens) {
+    public PushController(PushSubscriptionRepository subscriptions, FcmTokenRepository fcmTokens, DeviceRepository devices) {
         this.subscriptions = subscriptions;
         this.fcmTokens = fcmTokens;
+        this.devices = devices;
     }
 
-    /** `app` is optional: absent = a client from before the field existed (legacy notification behaviour). */
-    public record FcmTokenRequest(String token, String app) {}
+    /**
+     * `app` is optional: absent = a client from before the field existed (legacy notification behaviour).
+     * `deviceId` is optional: the caller's own Signal device id, sent only by mobile builds that decrypt
+     * data-only message pushes themselves. Absent = keep sending the generic visible notification.
+     */
+    public record FcmTokenRequest(String token, String app, Integer deviceId) {}
 
     /**
      * Android app registers its FCM token. Idempotent; if the device was last
@@ -38,6 +44,9 @@ public class PushController {
                 .orElseGet(() -> new FcmToken(username, req.token()));
         row.setUsername(username);
         row.setApp(sanitizeApp(req.app()));
+        // Only a device of the caller's own account: a token must never pull someone else's envelopes.
+        Integer deviceId = req.deviceId();
+        row.setDeviceId(deviceId != null && devices.existsByUsernameAndDeviceId(username, deviceId) ? deviceId : null);
         fcmTokens.save(row);
         return ResponseEntity.ok().build();
     }
