@@ -25,7 +25,7 @@ import Animated, {
 } from 'react-native-reanimated'
 import { scheduleOnRN } from 'react-native-worklets'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { openPreviewWith, useCloseMediaFlow } from '@/media/api'
+import { openPreviewWith, useCloseMediaFlow, useMediaBack } from '@/media/api'
 import { clampZoom, dragToZoom, formatDuration } from '@/media/helpers'
 import { randomId } from '@/media/files'
 import { MAX_VIDEO_SECONDS } from '@/media/limits'
@@ -51,6 +51,7 @@ const toUri = (p: string) => (p.startsWith('file://') || p.startsWith('content:/
 export default function CameraScreen() {
   const params = useLocalSearchParams<{ conversationId: string; allowViewOnce?: string; viewOnce?: string }>()
   const close = useCloseMediaFlow()
+  useMediaBack('camera')
   const insets = useSafeAreaInsets()
   const { height: screenH } = useWindowDimensions()
   const focused = useIsFocused()

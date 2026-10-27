@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons'
 import { Image } from 'expo-image'
-import { router, useLocalSearchParams } from 'expo-router'
+import { router, useIsFocused, useLocalSearchParams } from 'expo-router'
 import { useEvent } from 'expo'
 import { useVideoPlayer, VideoView } from 'expo-video'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -12,6 +12,8 @@ import {
   discardViewOnce, downloadMedia, getCachedMedia, saveToGallery, shareLocalFile, MediaError, type LocalMedia,
 } from '@/media/pipeline'
 import { endViewerSession, getViewerSession, type ViewerItem } from '@/media/session'
+import { useMediaBack } from '@/media/api'
+import { shouldLeaveOrphanedMediaScreen } from '@/navigation/mediaBack'
 import { screenSecurity } from '@/media/screenSecurity'
 import { kindFromMime } from '@/media/helpers'
 import { getViewOnceState, markViewOnceOpened } from '@/media/viewOnceStore'
@@ -212,9 +214,12 @@ export default function ViewerScreen() {
   const isOnce = !!current?.viewOnce && !current.mine
 
   useEffect(() => () => endViewerSession(sid), [sid])
+  const focused = useIsFocused()
   useEffect(() => {
-    if (!session) router.back()
-  }, [session])
+    if (!shouldLeaveOrphanedMediaScreen({ hasData: !!session, focused, leaving: closing.current })) return
+    closing.current = true
+    router.back()
+  }, [session, focused])
 
   const finish = useCallback(() => {
     if (router.canGoBack()) router.back()
@@ -229,6 +234,7 @@ export default function ViewerScreen() {
       }),
     )
   }, [closeP, finish])
+  useMediaBack('viewer', { closeViewer: close })
 
   const pan = Gesture.Pan()
     .enabled(!zoomed)

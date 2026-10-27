@@ -6,7 +6,7 @@ import { useLocalSearchParams } from 'expo-router'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { openDocumentPicker, openPreviewWith, useCloseMediaFlow } from '@/media/api'
+import { openDocumentPicker, openPreviewWith, useCloseMediaFlow, useMediaBack } from '@/media/api'
 import { formatDuration, guessMime } from '@/media/helpers'
 import { MAX_SELECTION } from '@/media/limits'
 import type { MediaSource } from '@/media/types'
@@ -92,6 +92,8 @@ export default function PickerScreen() {
   const gen = useRef(0)
 
   const selecting = selected.length > 0
+  const clearSelection = useCallback(() => setSelected([]), [])
+  useMediaBack('picker', { selecting, clearSelection })
   const orderOf = useMemo(() => new Map(selected.map((m, i) => [m.id, i + 1])), [selected])
   const album = albums.find(a => a.key === albumKey)?.album ?? null
 

@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { Image } from 'expo-image'
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator'
 import { useVideoPlayer, VideoView } from 'expo-video'
-import { router, useLocalSearchParams } from 'expo-router'
+import { router, useIsFocused, useLocalSearchParams } from 'expo-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   FlatList,
@@ -19,7 +19,8 @@ import {
 } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useCloseMediaFlow } from '@/media/api'
+import { useCloseMediaFlow, useMediaBack } from '@/media/api'
+import { shouldLeaveOrphanedMediaScreen } from '@/navigation/mediaBack'
 import { formatBytes, formatDuration } from '@/media/helpers'
 import { randomId } from '@/media/files'
 import { UploadJob } from '@/media/pipeline'
@@ -79,9 +80,14 @@ export default function PreviewScreen() {
   const hasImages = slots.some(s => s.kind === 'image')
   const canViewOnce = !!draft?.allowViewOnce && current?.kind !== 'file'
 
+  useMediaBack('preview')
+  const focused = useIsFocused()
+  const leaving = useRef(false)
   useEffect(() => {
-    if (!draft) router.back()
-  }, [draft])
+    if (!shouldLeaveOrphanedMediaScreen({ hasData: !!draft, focused, leaving: leaving.current })) return
+    leaving.current = true
+    close()
+  }, [draft, focused, close])
 
   const patch = useCallback((i: number, p: Partial<Slot>) => {
     setSlots(prev => prev.map((s, k) => (k === i ? { ...s, ...p } : s)))
@@ -151,6 +157,7 @@ export default function PreviewScreen() {
         }
       })
       await dispatchOutgoing(outgoing)
+      leaving.current = true // the discarded draft must not trigger a second back during the exit
       discardDraft(draft.id)
       close()
     } catch (e) {

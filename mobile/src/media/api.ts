@@ -1,6 +1,8 @@
-import { router, useNavigation } from 'expo-router'
+import { router, useFocusEffect, useNavigation } from 'expo-router'
 import { useCallback } from 'react'
+import { BackHandler } from 'react-native'
 import * as DocumentPicker from 'expo-document-picker'
+import { mediaBackAction, type MediaScreen } from '@/navigation/mediaBack'
 import { createDraft, createViewerSession, type ViewerItem, type ViewerOrigin } from './session'
 import { guessMime, kindFromMime } from './helpers'
 import { randomId } from './files'
@@ -80,4 +82,40 @@ export function useCloseMediaFlow(): () => void {
     if (parent?.canGoBack()) parent.goBack()
     else if (router.canGoBack()) router.back()
   }, [nav])
+}
+
+/**
+ * Android back on a media screen (rules in src/navigation/mediaBack.ts): always handled here, one step inside
+ * the flow or back to the chat, so it never reaches the activity's fallback that sends Iris to the background.
+ * Registered while the screen is focused; it runs before react-navigation's own handler.
+ */
+export function useMediaBack(screen: MediaScreen, o: { selecting?: boolean; clearSelection?: () => void; closeViewer?: () => void } = {}): void {
+  const nav = useNavigation()
+  const closeFlow = useCloseMediaFlow()
+  const { selecting, clearSelection, closeViewer } = o
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        // This screen's own navigator is the media stack: anything under it there is a step back in the flow.
+        const canPopInFlow = (nav.getState()?.index ?? 0) > 0
+        switch (mediaBackAction({ screen, canPopInFlow, selecting })) {
+          case 'close-viewer':
+            if (closeViewer) closeViewer()
+            else closeFlow()
+            break
+          case 'clear-selection':
+            clearSelection?.()
+            break
+          case 'pop':
+            nav.goBack()
+            break
+          case 'close-flow':
+            closeFlow()
+            break
+        }
+        return true
+      })
+      return () => sub.remove()
+    }, [nav, closeFlow, screen, selecting, clearSelection, closeViewer]),
+  )
 }
