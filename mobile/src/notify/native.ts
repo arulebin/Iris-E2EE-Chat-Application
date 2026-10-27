@@ -1,4 +1,5 @@
 import { requireOptionalNativeModule } from 'expo-modules-core'
+import type { BackgroundStatus } from './backgroundRules'
 import type { ConversationNotification } from './format'
 
 /** Shape of com.iris.notify.IrisNotifyModule (modules/iris-calls/android). Android only. */
@@ -12,6 +13,10 @@ export interface IrisNotifyNative {
   showSocial(title: string, body: string, path: string): void
   /** The push with this id was handled by JS (no native generic fallback needed). */
   handled(pushId: string): void
+  /** Vendor + whether Iris may run in the background (absent on binaries before the OEM prompt). */
+  backgroundStatus?(): BackgroundStatus
+  /** Vendor autostart page + the system battery-exemption dialog. False when nothing could be opened. */
+  openBackgroundSettings?(): boolean
 }
 
 /** Null on iOS / web / older binaries. Its presence means this build decrypts data-only message pushes. */

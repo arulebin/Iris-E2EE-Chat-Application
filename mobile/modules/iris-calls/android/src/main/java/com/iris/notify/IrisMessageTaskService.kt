@@ -33,6 +33,6 @@ class IrisMessageTaskService : HeadlessJsTaskService() {
 
   companion object {
     const val TASK_NAME = "IrisMessage"
-    private const val TIMEOUT_MS = 50_000L
+    const val TIMEOUT_MS = 50_000L
   }
 }

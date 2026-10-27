@@ -5,7 +5,8 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { BackHandler, Pressable, StyleSheet, TextInput, View, useWindowDimensions } from 'react-native'
 import Animated, { FadeIn, FadeOut, interpolate, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { useChats, useProfile, useRequests, useServices, useSession } from '@/state/hooks'
+import { useBackgroundDeliveryPrompt } from '@/notify/useBackgroundPrompt'
+import { useChats, useProfile, useRequests, useServices, useSession, useSettings } from '@/state/hooks'
 import type { ChatSummary } from '@/state/services'
 import { Avatar } from '@/ui/components/Avatar'
 import { ChatRow } from '@/ui/components/ChatRow'
@@ -30,6 +31,7 @@ export default function ChatListScreen() {
   const chatsQ = useChats()
   const reqQ = useRequests()
   const profileQ = useProfile()
+  useBackgroundDeliveryPrompt(useSettings().settings.notifications)
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
