@@ -44,16 +44,19 @@ export function Avatar({ name, uri, size = 96 }: { name: string; uri?: string; s
 
 // ── controls ───────────────────────────────────────────────────
 
-export function RoundButton({ label, onPress, active, danger, success, size = 56, children }: {
+export function RoundButton({ label, onPress, active, danger, success, raised, size = 56, children }: {
   label: string
   onPress: () => void
   active?: boolean
   danger?: boolean
   success?: boolean
+  /** Over live video: a darker fill and a soft shadow on the button itself, so it reads without a scrim. */
+  raised?: boolean
   size?: number
   children: ReactNode
 }) {
-  const bg = danger ? RED : success ? GREEN : active ? '#fff' : 'rgba(255,255,255,0.16)'
+  const idle = raised ? 'rgba(18,20,28,0.5)' : 'rgba(255,255,255,0.16)'
+  const bg = danger ? RED : success ? GREEN : active ? '#fff' : idle
   return (
     <Pressable
       accessibilityRole="button"
@@ -62,6 +65,7 @@ export function RoundButton({ label, onPress, active, danger, success, size = 56
       onPress={onPress}
       style={({ pressed }) => [
         { width: size, height: size, borderRadius: size / 2, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' },
+        raised && styles.raised,
         pressed && { transform: [{ scale: 0.94 }], opacity: 0.9 },
       ]}
     >
@@ -100,6 +104,7 @@ export function useElapsed(startedAt: number | null): number {
 
 const styles = StyleSheet.create({
   bars: { flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: 14 },
+  raised: { boxShadow: '0px 2px 10px rgba(0, 0, 0, 0.35)' },
   chip: {
     flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6,
     borderRadius: 999, backgroundColor: 'rgba(0,0,0,0.45)',
