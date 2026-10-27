@@ -4,6 +4,7 @@
 import NetInfo from '@react-native-community/netinfo'
 import { AppState } from 'react-native'
 import { IrisCalls, type AudioState, type NativeCallAction } from '../../modules/iris-calls'
+import { pipWanted } from './controls'
 import type { CallEngine, CallSnapshot } from './engine'
 import { currentCall } from './signals'
 import type { CallMode } from './types'
@@ -58,6 +59,7 @@ export function startNativeBindings(engine: CallEngine, o: BindingOptions): () =
 
     if (kind === 'idle') {
       if (pkind !== 'idle') {
+        // endSession also disarms PiP and closes the PiP window if the call ended inside it.
         IrisCalls.endSession(pcur?.callId ?? null)
         nativeRinging.clear()
       }
@@ -104,11 +106,11 @@ export function startNativeBindings(engine: CallEngine, o: BindingOptions): () =
 
     if (p && p.speakerOn !== s.speakerOn && kind !== 'incoming') IrisCalls.setSpeaker(s.speakerOn)
 
-    // Window / sensors.
+    // Window / sensors. PiP is armed only for an active video call (never outside a call, see controls.ts).
     const video = isVideo(s)
     if (video !== (p ? isVideo(p) : false)) {
       IrisCalls.setKeepAwake(video)
-      IrisCalls.setPip(video, 9, 16)
+      IrisCalls.setPip(pipWanted(s), 9, 16)
     }
     if (proximityWanted(s) !== (p ? proximityWanted(p) : false)) IrisCalls.setProximity(proximityWanted(s))
   }
@@ -148,8 +150,10 @@ export function startNativeBindings(engine: CallEngine, o: BindingOptions): () =
     }
     const sub1 = native.addListener('onCallAction', onAction)
     const sub2 = native.addListener('onPipChange', ({ active }) => {
-      // PiP shows the call chrome-less: the overlay reads this to hide controls.
+      // PiP shows the call chrome-less: the overlay reads this to draw only the call.
       pipListeners.forEach((l) => l(active))
+      // Expanded back to full screen: land on the call screen, not the in-app mini window over a chat.
+      if (!active && engine.getSnapshot().state.kind !== 'idle') engine.setMinimized(false)
     })
     const sub3 = native.addListener('onAudioDevices', (st) => {
       audio = st

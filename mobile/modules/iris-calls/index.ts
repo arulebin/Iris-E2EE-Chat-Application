@@ -34,6 +34,8 @@ export interface IrisCallsNative {
   setShowOverLockscreen(on: boolean): void
   moveTaskToBack(): void
   setPip(enabled: boolean, width: number, height: number): void
+  /** Enter picture-in-picture now (minimise button). False when PiP is not armed (no video call) or refused. */
+  enterPip(): boolean
   isInPip(): boolean
   addListener(event: 'onCallAction', cb: (e: NativeCallAction) => void): Subscription
   addListener(event: 'onPipChange', cb: (e: { active: boolean }) => void): Subscription

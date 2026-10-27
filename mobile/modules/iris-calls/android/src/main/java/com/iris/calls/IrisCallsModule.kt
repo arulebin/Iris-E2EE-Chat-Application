@@ -33,11 +33,13 @@ class IrisCallsModule : Module() {
 
     OnCreate {
       CallBridge.sink = { name, payload -> sendEvent(name, payload) }
+      PipState.listener = { now -> notifyPip(now) }
     }
 
     OnDestroy {
       CallBridge.sink = null
       CallBridge.jsReady = false
+      PipState.listener = null
     }
 
     OnNewIntent { intent ->
@@ -112,7 +114,11 @@ class IrisCallsModule : Module() {
         IrisCallsPackage.setShowOverLockscreen(a, false)
       }
       PipState.enabled = false
-      ui { a -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) a.setPictureInPictureParams(PipState.params()) }
+      ui { a ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) a.setPictureInPictureParams(PipState.params())
+        // The call ended inside the PiP window: close the window instead of leaving the app shrunk in it.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && a.isInPictureInPictureMode) a.moveTaskToBack(true)
+      }
     }
 
     // ── audio / tones ──────────────────────────────────────────
@@ -146,21 +152,39 @@ class IrisCallsModule : Module() {
       }
     }
 
+    Function("enterPip") {
+      val a = activity
+      if (!PipState.enabled || a == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !PipState.allowed(a)) {
+        return@Function false
+      }
+      a.runOnUiThread {
+        try { a.enterPictureInPictureMode(PipState.params()) } catch (e: IllegalStateException) {
+          android.util.Log.w("IrisCalls", "enterPictureInPictureMode refused", e)
+        }
+      }
+      true
+    }
+
     Function("isInPip") {
       Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && activity?.isInPictureInPictureMode == true
     }
   }
 
-  /** PiP has no direct callback in the module DSL; the window resizing is the reliable signal. */
+  private fun notifyPip(now: Boolean) {
+    if (now == lastPip) return
+    lastPip = now
+    sendEvent("onPipChange", mapOf("active" to now))
+  }
+
+  /**
+   * Primary signal: MainActivity.onPictureInPictureModeChanged -> PipState.changed (plugins/withPipModeCallback.js).
+   * Fallback: the window resizing, for a binary whose activity lacks that hook.
+   */
   private fun watchPip(a: Activity) {
     if (pipListener != null) return
     val view = a.window.decorView
     val l = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-      val now = Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && a.isInPictureInPictureMode
-      if (now != lastPip) {
-        lastPip = now
-        sendEvent("onPipChange", mapOf("active" to now))
-      }
+      notifyPip(Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && a.isInPictureInPictureMode)
     }
     view.addOnLayoutChangeListener(l)
     pipListener = l
@@ -171,6 +195,6 @@ class IrisCallsModule : Module() {
     pipListener?.let { pipView?.removeOnLayoutChangeListener(it) }
     pipListener = null
     pipView = null
-    if (lastPip) { lastPip = false; sendEvent("onPipChange", mapOf("active" to false)) }
+    notifyPip(false)
   }
 }

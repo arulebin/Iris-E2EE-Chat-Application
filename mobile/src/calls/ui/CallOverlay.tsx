@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Pressable, StyleSheet, Text, View } from 'react-native'
+import { AppState, Pressable, StyleSheet, Text, View } from 'react-native'
 import Animated, { FadeIn, FadeInUp, FadeOut } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { IrisCalls } from '../../../modules/iris-calls'
 import { subscribePip } from '../bindings'
+import { minimiseTarget } from '../controls'
 import type { CallSnapshot } from '../engine'
 import { acceptCall, declineCall, hangUp, isCallsConfigured, startCall, useCall } from '../service'
 import { formatDuration } from '../signals'
@@ -21,9 +22,16 @@ export type CallOverlayProps = {
   onQuickReply?: (peer: string, text: string) => void
 }
 
+const nativeIsInPip = () => { try { return IrisCalls?.isInPip() ?? false } catch { return false } }
+
+/** True while Android shows the app in the picture-in-picture window (native event, re-checked on every app state change). */
 function useIsPip(): boolean {
-  const [pip, setPip] = useState(() => { try { return IrisCalls?.isInPip() ?? false } catch { return false } })
-  useEffect(() => subscribePip(setPip), [])
+  const [pip, setPip] = useState(nativeIsInPip)
+  useEffect(() => {
+    const off = subscribePip(setPip)
+    const sub = AppState.addEventListener('change', () => setPip(nativeIsInPip()))
+    return () => { off(); sub.remove() }
+  }, [])
   return pip
 }
 
@@ -54,6 +62,25 @@ function ConfiguredOverlay({ profileOf, onQuickReply }: CallOverlayProps) {
 
   const showSummary = state.kind === 'idle' && call.summary && summaryWorthShowing(call.summary)
 
+  // Video call: the system PiP window (only the call shows in it). Voice call, or PiP refused: the in-app window.
+  const minimise = () => {
+    if (minimiseTarget(snap, !!IrisCalls) === 'pip') {
+      try {
+        if (IrisCalls?.enterPip()) return
+      } catch { /* fall back below */ }
+    }
+    engine.setMinimized(true)
+  }
+
+  // In the PiP window only the call is drawn: remote video full-bleed (or the avatar), nothing else.
+  if (pip && (state.kind === 'outgoing' || state.kind === 'active')) {
+    return (
+      <View style={StyleSheet.absoluteFill} pointerEvents="none">
+        <PipView snap={snap} name={name} avatarUrl={profile?.avatarUrl} />
+      </View>
+    )
+  }
+
   return (
     <>
       {/* Plain box-none View only: a nested GestureHandlerRootView / SafeAreaProvider swallows every touch
@@ -73,10 +100,9 @@ function ConfiguredOverlay({ profileOf, onQuickReply }: CallOverlayProps) {
         )}
 
         {(state.kind === 'outgoing' || state.kind === 'active') && (
-          pip ? <PipView snap={snap} name={name} avatarUrl={profile?.avatarUrl} />
-            : !call.minimized ? (
+          !call.minimized ? (
               <CallScreen snap={snap} engine={engine} name={name} avatarUrl={profile?.avatarUrl}
-                onHangUp={hangUp} onToggleCamera={() => void engine.toggleCamera()} />
+                onHangUp={hangUp} onToggleCamera={() => void engine.toggleCamera()} onMinimise={minimise} />
             ) : !call.previewHidden ? (
               <MiniWindow snap={snap} engine={engine} name={name} avatarUrl={profile?.avatarUrl} />
             ) : (

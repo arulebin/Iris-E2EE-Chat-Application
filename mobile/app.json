@@ -116,6 +116,7 @@
       "./modules/iris-calls/plugin",
       "./plugins/withDevNetworkSecurity",
       "./plugins/withBackToBackground",
+      "./plugins/withPipModeCallback",
       "./plugins/withNoAndroidBackup"
     ],
     "experiments": {
