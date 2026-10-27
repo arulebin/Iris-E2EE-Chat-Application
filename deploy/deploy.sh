@@ -18,9 +18,11 @@ echo "==> building backend jar"
 JAR="$(ls "$ROOT"/backend/target/*.jar | grep -v plain | head -1)"
 
 echo "==> uploading"
-"${SSH[@]}" 'mkdir -p ~/iris/secrets && chmod 700 ~/iris/secrets'
+"${SSH[@]}" 'mkdir -p ~/iris/secrets ~/iris/updates-server ~/iris/updates-data && chmod 700 ~/iris/secrets'
 scp -i "$KEY" -q "$ROOT/deploy/docker-compose.prod.yml" "$ROOT/deploy/Caddyfile" \
   "$ROOT/deploy/.env.example" "$USER_@$HOST:~/iris/"
+# OTA update server (serves pre-signed files from ~/iris/updates-data; the signing key never leaves the dev machine).
+scp -i "$KEY" -q "$ROOT/updates-server/server.mjs" "$ROOT/updates-server/package.json" "$USER_@$HOST:~/iris/updates-server/"
 scp -i "$KEY" -q "$JAR" "$USER_@$HOST:~/iris/app.jar.new"
 
 echo "==> (re)starting"

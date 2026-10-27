@@ -25,9 +25,9 @@ developer machine (OFFLINE private key)            VM (Caddy -> updates:8081)   
   `GET /assets/<sha256>.<ext>`, `GET /native.json`, `GET /healthz`. The signature header
   is passed through verbatim from the uploaded `signature.txt`. It reads a read-only data
   dir and holds no key.
-- Caddy routes `https://<host>/updates/*` to the `updates` compose service (profile
-  `updates`, `mem_limit: 48m`, read-only FS, non-root, no capabilities). It is **not
-  started by default** and **not deployed** by `deploy.sh`.
+- Caddy routes `https://<host>/updates/*` to the `updates` compose service (`mem_limit: 48m`,
+  read-only FS, non-root, no capabilities). It starts with the rest of the stack, and
+  `deploy.sh` copies `updates-server/` and creates `~/iris/updates-data`.
 - The app (`mobile/src/updates`) uses `expo-updates` plus a small hook layer.
 
 ### Server data layout (`~/iris/updates-data/`)
@@ -73,10 +73,10 @@ a malicious binary (the cert is embedded at build time, so build integrity matte
   manager). **Never** put it in the repo, on the VM, in CI logs, or in chat.
   `.gitignore` blocks `.ota-dev/`, `.ota-keys/`, `**/private-key.pem`, `*.private.pem`,
   `*-private-key.pem`, `ota-out/`.
-- The repo currently ships a **DEV certificate** (`CN=Iris OTA DEV (replace before
-  release)`) whose private key exists only in the gitignored `mobile/.ota-dev/` of the machine
-  that generated it. It exists so `app.json` is valid and local testing works. The publish
-  script warns when signing with a DEV cert. **Replace it before any real release build.**
+- `mobile/certs/certificate.pem` is the **production certificate** (`CN=Iris OTA`, valid to
+  2036-10-27, generated 2026-10-27); its private key lives only in `~/.iris-ota/private-key.pem`
+  on the developer PC. APKs built before that date embed the old DEV certificate (whose key was
+  lost) and can never take an OTA update: install a new APK once.
 - The script refuses to sign if the private key does not match the embedded certificate or
   the certificate expired.
 - `codeSigningMetadata.keyid` is `main`; keep it in sync with the signature header.
@@ -156,17 +156,18 @@ commit (updates are ordered by creation time, so a re-publish is "newer"). Faste
 emergency stop without a key: delete `channels/<ch>/<rv>/<platform>/current.json` on the
 server (clients keep what they have; nothing new is served).
 
-## Enabling the server on the VM (not done automatically)
+## Enabling the server on the VM
+
+`deploy/deploy.sh` does it (copies the compose file, Caddyfile and `updates-server/`, creates
+`~/iris/updates-data`, `docker compose up -d`). Without redeploying the backend:
 
 ```bash
-node scripts/ota-publish.mjs publish --channel production --sync-server --upload   # creates ~/iris/updates-data + updates-server
 scp -i ~/.ssh/iris-oracle.key deploy/docker-compose.prod.yml deploy/Caddyfile opc@129.225.92.235:~/iris/
-ssh -i ~/.ssh/iris-oracle.key opc@129.225.92.235 'cd ~/iris && docker compose -f docker-compose.prod.yml --profile updates up -d updates && docker compose -f docker-compose.prod.yml restart caddy'
+node scripts/ota-publish.mjs publish --channel production --sync-server --upload   # creates ~/iris/updates-data + updates-server
+ssh -i ~/.ssh/iris-oracle.key opc@129.225.92.235 'cd ~/iris && docker compose -f docker-compose.prod.yml up -d updates && docker compose -f docker-compose.prod.yml restart caddy'
 curl https://129-225-92-235.sslip.io/updates/healthz
 ```
-`deploy.sh` re-copies the compose/Caddyfile, so later runs keep the route; the `updates`
-service stays under its profile (`docker compose ... --profile updates up -d`). Old
-releases and assets accumulate under `updates-data/`; prune manually.
+Old releases and assets accumulate under `updates-data/`; prune manually.
 
 ## Binary (native) updates
 
