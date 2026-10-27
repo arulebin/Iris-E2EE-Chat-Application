@@ -137,10 +137,28 @@ public class FcmSender {
         return n;
     }
 
+    /**
+     * Whether one token is pushed for a new message, given which of the user's devices have the app open and
+     * visible right now. Decided per device: a phone in the background (in recents, possibly frozen by Android
+     * with its socket still open) is pushed even while the same account is open on another device. A token
+     * without a device id (legacy app) cannot be told apart, so it keeps the old per-user rule.
+     */
+    static boolean shouldPush(Integer tokenDeviceId, java.util.Set<Integer> visibleDevices, boolean anyVisible) {
+        if (tokenDeviceId == null) return !anyVisible;
+        return !visibleDevices.contains(tokenDeviceId);
+    }
+
     /** A new v1/v2 message for `username`; `envelopes` = that user's copies (null for v1). */
     public void sendNewMessage(String username, long messageId, List<MessageEnvelope> envelopes) {
+        sendNewMessage(username, messageId, envelopes, java.util.Set.of(), false);
+    }
+
+    /** As above, skipping the devices that are open and visible (they got the message over their socket). */
+    public void sendNewMessage(String username, long messageId, List<MessageEnvelope> envelopes,
+                               java.util.Set<Integer> visibleDevices, boolean anyVisible) {
         if (messaging == null) return;
         for (FcmToken t : tokens.findByUsername(username)) {
+            if (!shouldPush(t.getDeviceId(), visibleDevices, anyVisible)) continue;
             MessagePushPlan plan = planMessage(t.getApp(), t.getDeviceId(), messageId, envelopes);
             deliver(username, t, plan.dataOnly()
                     ? dataMessage(t, plan.data(), plan.collapseKey(), MESSAGE_TTL_MS)

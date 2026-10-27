@@ -74,4 +74,17 @@ class FcmMessagePushTest {
         assertFalse(FcmSender.planSocial("com.iris.chat", 1, FcmSender.SocialEvent.REQUEST).dataOnly());
         assertFalse(FcmSender.planSocial(FcmSender.MOBILE_APP_ID, null, FcmSender.SocialEvent.REQUEST).dataOnly());
     }
+
+    @Test
+    void backgroundedPhoneIsPushedEvenWhileAnotherDeviceOfTheUserIsOpen() {
+        // Device 2 (phone in recents) is pushed although device 1 (web / other phone) is visible.
+        assertTrue(FcmSender.shouldPush(2, java.util.Set.of(1), true));
+        // The device that is open and visible got it over its socket.
+        assertFalse(FcmSender.shouldPush(1, java.util.Set.of(1), true));
+        // Nobody visible: everyone is pushed.
+        assertTrue(FcmSender.shouldPush(1, java.util.Set.of(), false));
+        // Legacy token without a device id keeps the per-user rule.
+        assertFalse(FcmSender.shouldPush(null, java.util.Set.of(1), true));
+        assertTrue(FcmSender.shouldPush(null, java.util.Set.of(), false));
+    }
 }

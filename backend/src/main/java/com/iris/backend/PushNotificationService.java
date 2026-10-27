@@ -68,6 +68,16 @@ public class PushNotificationService {
         sendWebPush(username, "Iris", "New message");
     }
 
+    /**
+     * A new message while some of the user's devices may have the app open: Android devices are pushed unless
+     * that very device is visible; browsers (no device id on a Web Push subscription) only when none is.
+     */
+    public void sendNewMessage(String username, long messageId, List<MessageEnvelope> envelopes,
+                               java.util.Set<Integer> visibleDevices, boolean anyVisible) {
+        fcmSender.sendNewMessage(username, messageId, envelopes, visibleDevices, anyVisible);
+        if (!anyVisible) sendWebPush(username, "Iris", "New message");
+    }
+
     /** Connection request received / accepted: data-only wake for the mobile app, generic text elsewhere. */
     public void sendSocial(String username, FcmSender.SocialEvent event) {
         String body = event == FcmSender.SocialEvent.REQUEST ? "New connection request" : "Connection request accepted";

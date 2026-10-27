@@ -379,9 +379,7 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         sent.set("message", objectMapper.valueToTree(toOutgoing(stored.message())));
         session.sendMessage(new TextMessage(sent.toString()));
 
-        if (!isActive(incoming.to())) {
-            pushNotificationService.sendNewMessage(incoming.to(), stored.message().getId(), envelopesOf(stored, incoming.to()));
-        }
+        pushNewMessage(incoming.to(), stored);
     }
 
     /**
@@ -446,10 +444,24 @@ public class ChatWebSocketHandler extends TextWebSocketHandler {
         session.sendMessage(new TextMessage(sent.toString()));
 
         for (String m : members) {
-            if (!m.equals(sender) && !isActive(m)) {
-                pushNotificationService.sendNewMessage(m, stored.message().getId(), envelopesOf(stored, m));
-            }
+            if (!m.equals(sender)) pushNewMessage(m, stored);
         }
+    }
+
+    /** Push a v2 message to the recipient's devices that are not open and visible (decided per device, see FcmSender.shouldPush). */
+    private void pushNewMessage(String user, EnvelopeService.Stored stored) {
+        pushNotificationService.sendNewMessage(user, stored.message().getId(), envelopesOf(stored, user),
+            visibleDevices(user), isActive(user));
+    }
+
+    /** Signal device ids of the user's sessions that are open with the app in the foreground. */
+    private java.util.Set<Integer> visibleDevices(String username) {
+        java.util.Set<Integer> ids = new java.util.HashSet<>();
+        for (WebSocketSession s : sessionsByUser.getOrDefault(username, Set.of())) {
+            Integer d = deviceIdOf(s);
+            if (d != null && s.isOpen() && Boolean.TRUE.equals(s.getAttributes().getOrDefault("visible", Boolean.TRUE))) ids.add(d);
+        }
+        return ids;
     }
 
     /** The copies of a stored message addressed to one user's devices (what that user's pushes may carry). */
